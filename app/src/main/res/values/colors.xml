@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="oryn_black">#0B0D10</color>
+    <color name="oryn_panel">#14171B</color>
+    <color name="oryn_brass">#C7A463</color>
+    <color name="oryn_brass_hi">#DEC07A</color>
+    <color name="oryn_ivory">#F3F0EA</color>
+    <color name="oryn_muted">#AAA8A2</color>
+</resources>

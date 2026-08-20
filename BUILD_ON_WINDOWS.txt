@@ -1,0 +1,13 @@
+ORYN MOBILE v1.0 — WINDOWS BUILD
+
+Recommended:
+1. Install Android Studio.
+2. Open this ORYN_Android_v1.0 folder.
+3. Wait for Gradle sync and SDK Platform 36 installation.
+4. Build > Build APK(s).
+5. Find the APK at:
+   app\build\outputs\apk\debug\app-debug.apk
+
+Alternative:
+Push this project to GitHub. The included GitHub Actions workflow automatically
+builds ORYN-Mobile-v1.0-debug.apk without requiring Android Studio on your PC.
