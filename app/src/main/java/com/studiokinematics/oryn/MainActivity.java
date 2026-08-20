@@ -200,7 +200,7 @@ public class MainActivity extends Activity {
     private Button makeButton(String text, boolean primary) {
         Button b = new Button(this);
         b.setText(text);
-        b.setTextAllCaps(false);
+        b.setAllCaps(false);
         b.setTextSize(14);
         b.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         b.setPadding(dp(18), 0, dp(18), 0);
