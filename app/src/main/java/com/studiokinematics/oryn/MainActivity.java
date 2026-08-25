@@ -17,7 +17,6 @@ import android.net.Network;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -31,11 +30,9 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
-import android.widget.LinearLayout;
-import android.widget.ProgressBar;
-import android.widget.TextView;
 import android.widget.Toast;
+
+import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -50,6 +47,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * ORYN Mobile 2.0
+ *
+ * The complete ORYN frontend is bundled inside the APK and opens immediately.
+ * The Raspberry Pi / ORYN controller is a connection target, not the source of
+ * the Android interface. Once selected, the existing frontend apiClient talks
+ * directly to that ORYN table over Wi-Fi (including WebSockets).
+ */
 public class MainActivity extends Activity {
     private static final String PREFS = "oryn_mobile";
     private static final String PREF_LAST_URL = "last_url";
@@ -59,36 +64,41 @@ public class MainActivity extends Activity {
     private static final int C_BLACK = Color.rgb(11, 13, 16);
     private static final int C_PANEL = Color.rgb(20, 23, 27);
     private static final int C_BRASS = Color.rgb(199, 164, 99);
-    private static final int C_BRASS_HI = Color.rgb(222, 192, 122);
     private static final int C_IVORY = Color.rgb(243, 240, 234);
-    private static final int C_MUTED = Color.rgb(170, 168, 162);
 
     private FrameLayout root;
     private WebView webView;
-    private LinearLayout overlay;
-    private TextView status;
-    private TextView detail;
-    private ProgressBar spinner;
-    private Button primaryButton;
-    private Button secondaryButton;
-
-    private String currentBaseUrl = null;
-    private String pendingFoundUrl = null;
-    private int discoveryGeneration = 0;
+    private Button connectButton;
+    private LocalOrynServer localServer;
     private ExecutorService discoveryPool;
+    private int discoveryGeneration = 0;
     private ValueCallback<Uri[]> filePathCallback;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
         getWindow().setStatusBarColor(C_BLACK);
         getWindow().setNavigationBarColor(C_BLACK);
 
         buildUi();
         configureWebView();
         requestNearbyPermissionIfUseful();
-        startDiscovery();
+
+        localServer = new LocalOrynServer(this);
+        try {
+            localServer.start();
+            webView.loadUrl(LocalOrynServer.BASE_URL + "/");
+        } catch (Exception e) {
+            new AlertDialog.Builder(this)
+                    .setTitle("ORYN could not start")
+                    .setMessage("The local Android interface could not be started.\n\n" + e.getMessage())
+                    .setPositiveButton("Close", (d, w) -> finish())
+                    .show();
+            return;
+        }
+
+        // Discovery is intentionally background-only. It never blocks the UI.
+        webView.postDelayed(this::startBackgroundDiscovery, 1200);
     }
 
     private void buildUi() {
@@ -97,134 +107,32 @@ public class MainActivity extends Activity {
 
         webView = new WebView(this);
         webView.setBackgroundColor(C_BLACK);
-        webView.setVisibility(View.INVISIBLE);
         root.addView(webView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
-        overlay = new LinearLayout(this);
-        overlay.setOrientation(LinearLayout.VERTICAL);
-        overlay.setGravity(Gravity.CENTER);
-        overlay.setPadding(dp(28), dp(32), dp(28), dp(32));
-        overlay.setBackgroundColor(C_BLACK);
+        connectButton = new Button(this);
+        connectButton.setText("Connect Table");
+        connectButton.setAllCaps(false);
+        connectButton.setTextColor(Color.rgb(12, 12, 10));
+        connectButton.setTextSize(13);
+        connectButton.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        connectButton.setPadding(dp(14), 0, dp(14), 0);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(14));
+        bg.setColor(C_BRASS);
+        bg.setStroke(dp(1), C_BRASS);
+        connectButton.setBackground(bg);
+        connectButton.setElevation(dp(8));
+        connectButton.setOnClickListener(v -> showConnectDialog());
 
-        FrameLayout.LayoutParams overlayParams = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT);
-        root.addView(overlay, overlayParams);
-
-        ImageView logo = new ImageView(this);
-        logo.setImageResource(com.studiokinematics.oryn.R.drawable.oryn_logo);
-        logo.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        GradientDrawable logoBg = new GradientDrawable();
-        logoBg.setShape(GradientDrawable.OVAL);
-        logoBg.setColor(C_PANEL);
-        logoBg.setStroke(dp(1), C_BRASS);
-        logo.setBackground(logoBg);
-        logo.setClipToOutline(true);
-        LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(92), dp(92));
-        logoLp.bottomMargin = dp(20);
-        overlay.addView(logo, logoLp);
-
-        TextView title = new TextView(this);
-        title.setText("ORYN");
-        title.setTextColor(C_IVORY);
-        title.setTextSize(28);
-        title.setGravity(Gravity.CENTER);
-        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        overlay.addView(title);
-
-        TextView subtitle = new TextView(this);
-        subtitle.setText("Designed to Move");
-        subtitle.setTextColor(C_BRASS_HI);
-        subtitle.setTextSize(14);
-        subtitle.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-        subLp.topMargin = dp(4);
-        overlay.addView(subtitle, subLp);
-
-        TextView brand = new TextView(this);
-        brand.setText("by Studio Kinematics™");
-        brand.setTextColor(C_MUTED);
-        brand.setTextSize(12);
-        brand.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams brandLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-        brandLp.topMargin = dp(3);
-        brandLp.bottomMargin = dp(34);
-        overlay.addView(brand, brandLp);
-
-        spinner = new ProgressBar(this);
-        spinner.setIndeterminate(true);
-        spinner.getIndeterminateDrawable().setTint(C_BRASS);
-        LinearLayout.LayoutParams spinLp = new LinearLayout.LayoutParams(dp(34), dp(34));
-        spinLp.bottomMargin = dp(18);
-        overlay.addView(spinner, spinLp);
-
-        status = new TextView(this);
-        status.setText("Finding your ORYN table…");
-        status.setTextColor(C_IVORY);
-        status.setTextSize(17);
-        status.setGravity(Gravity.CENTER);
-        status.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        overlay.addView(status);
-
-        detail = new TextView(this);
-        detail.setText("Make sure your phone and Raspberry Pi are on the same Wi-Fi.");
-        detail.setTextColor(C_MUTED);
-        detail.setTextSize(13);
-        detail.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams detailLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-        detailLp.topMargin = dp(8);
-        detailLp.bottomMargin = dp(22);
-        overlay.addView(detail, detailLp);
-
-        primaryButton = makeButton("Connect", true);
-        primaryButton.setVisibility(View.GONE);
-        overlay.addView(primaryButton, buttonLayoutParams());
-
-        secondaryButton = makeButton("Enter address manually", false);
-        secondaryButton.setOnClickListener(v -> showManualAddressDialog());
-        LinearLayout.LayoutParams secondaryLp = buttonLayoutParams();
-        secondaryLp.topMargin = dp(10);
-        overlay.addView(secondaryButton, secondaryLp);
+        FrameLayout.LayoutParams cp = new FrameLayout.LayoutParams(dp(128), dp(46));
+        cp.gravity = Gravity.TOP | Gravity.END;
+        cp.topMargin = dp(14);
+        cp.rightMargin = dp(14);
+        root.addView(connectButton, cp);
 
         setContentView(root);
-    }
-
-    private Button makeButton(String text, boolean primary) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setAllCaps(false);
-        b.setTextSize(14);
-        b.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        b.setPadding(dp(18), 0, dp(18), 0);
-
-        GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(dp(12));
-        if (primary) {
-            bg.setColor(C_BRASS);
-            bg.setStroke(dp(1), C_BRASS);
-            b.setTextColor(Color.rgb(12, 12, 10));
-        } else {
-            bg.setColor(C_PANEL);
-            bg.setStroke(dp(1), Color.rgb(55, 58, 62));
-            b.setTextColor(C_IVORY);
-        }
-        b.setBackground(bg);
-        return b;
-    }
-
-    private LinearLayout.LayoutParams buttonLayoutParams() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                Math.min(dp(360), getResources().getDisplayMetrics().widthPixels - dp(56)),
-                dp(50));
-        return lp;
     }
 
     private void configureWebView() {
@@ -242,19 +150,14 @@ public class MainActivity extends Activity {
         s.setDisplayZoomControls(false);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        s.setUserAgentString(s.getUserAgentString() + " ORYN-Mobile/1.0");
+        s.setUserAgentString(s.getUserAgentString() + " ORYN-Mobile/2.0 Standalone");
 
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
-            public boolean onShowFileChooser(
-                    WebView webView,
-                    ValueCallback<Uri[]> newFilePathCallback,
-                    FileChooserParams fileChooserParams) {
-                if (filePathCallback != null) {
-                    filePathCallback.onReceiveValue(null);
-                }
-                filePathCallback = newFilePathCallback;
-
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
+                                             FileChooserParams params) {
+                if (filePathCallback != null) filePathCallback.onReceiveValue(null);
+                filePathCallback = callback;
                 Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
                 intent.setType("*/*");
@@ -263,15 +166,12 @@ public class MainActivity extends Activity {
                         "image/svg+xml", "application/dxf", "image/vnd.dxf",
                         "text/plain", "application/octet-stream"
                 });
-
                 try {
                     startActivityForResult(intent, FILE_CHOOSER_REQUEST);
                     return true;
                 } catch (ActivityNotFoundException e) {
                     filePathCallback = null;
-                    Toast.makeText(MainActivity.this,
-                            "No file picker is available on this device.",
-                            Toast.LENGTH_LONG).show();
+                    Toast.makeText(MainActivity.this, "No file picker is available.", Toast.LENGTH_LONG).show();
                     return false;
                 }
             }
@@ -279,143 +179,191 @@ public class MainActivity extends Activity {
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
-            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
-                status.setText("Opening ORYN…");
-                detail.setText(url);
-                spinner.setVisibility(View.VISIBLE);
-                overlay.setVisibility(View.VISIBLE);
-            }
-
-            @Override
             public void onPageFinished(WebView view, String url) {
-                webView.setVisibility(View.VISIBLE);
-                overlay.setVisibility(View.GONE);
+                super.onPageFinished(view, url);
+                connectButton.bringToFront();
             }
 
             @Override
-            public void onReceivedError(
-                    WebView view,
-                    WebResourceRequest request,
-                    WebResourceError error) {
-                if (request.isForMainFrame()) {
-                    showOffline("Connection lost",
-                            "ORYN is not reachable right now. Check that the Pi is powered and connected.");
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame() && request.getUrl().toString().startsWith(LocalOrynServer.BASE_URL)) {
+                    Toast.makeText(MainActivity.this, "ORYN mobile interface failed to load.", Toast.LENGTH_LONG).show();
                 }
             }
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
-                if (isSameOrynHost(uri)) {
-                    return false;
-                }
-                Intent external = new Intent(Intent.ACTION_VIEW, uri);
-                try {
-                    startActivity(external);
-                } catch (ActivityNotFoundException ignored) {}
+                String scheme = uri.getScheme();
+                if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) return false;
+                try { startActivity(new Intent(Intent.ACTION_VIEW, uri)); } catch (Exception ignored) {}
                 return true;
             }
         });
     }
 
-    private boolean isSameOrynHost(Uri uri) {
-        if (currentBaseUrl == null || uri.getHost() == null) return true;
-        try {
-            Uri current = Uri.parse(currentBaseUrl);
-            return uri.getHost().equalsIgnoreCase(current.getHost());
-        } catch (Exception e) {
-            return true;
-        }
+    private void showConnectDialog() {
+        String last = getPreferencesStore().getString(PREF_LAST_URL, "");
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setHint("oryn.local or 192.168.0.224");
+        input.setText(last == null ? "" : last.replace("http://", "").replace("https://", ""));
+        input.setTextColor(Color.BLACK);
+        input.setHintTextColor(Color.DKGRAY);
+        input.setPadding(dp(14), dp(8), dp(14), dp(8));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Connect ORYN Table")
+                .setMessage("The app works independently. Enter a table address, or let ORYN search your Wi-Fi.")
+                .setView(input)
+                .setNegativeButton("Cancel", null)
+                .setNeutralButton("Search Wi-Fi", null)
+                .setPositiveButton("Connect", null)
+                .create();
+        dialog.setOnShowListener(d -> {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+                dialog.dismiss();
+                Toast.makeText(this, "Searching for ORYN on your Wi-Fi…", Toast.LENGTH_SHORT).show();
+                startBackgroundDiscovery(true);
+            });
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String value = input.getText().toString().trim();
+                if (value.isEmpty()) return;
+                dialog.dismiss();
+                connectToTable(normalizeBase(value), true);
+            });
+        });
+        dialog.show();
     }
 
-    private void requestNearbyPermissionIfUseful() {
-        if (Build.VERSION.SDK_INT >= 33) {
-            if (checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES)
-                    != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(
-                        new String[]{Manifest.permission.NEARBY_WIFI_DEVICES},
-                        NEARBY_PERMISSION_REQUEST);
-            }
-        }
-    }
+    private void startBackgroundDiscovery() { startBackgroundDiscovery(false); }
 
-    private void startDiscovery() {
-        int generation = ++discoveryGeneration;
-        pendingFoundUrl = null;
-        primaryButton.setVisibility(View.GONE);
-        secondaryButton.setVisibility(View.VISIBLE);
-        spinner.setVisibility(View.VISIBLE);
-        status.setText("Finding your ORYN table…");
-        detail.setText("Checking the last table, oryn.local, and your local network.");
-        overlay.setVisibility(View.VISIBLE);
-        webView.setVisibility(View.INVISIBLE);
-
-        if (discoveryPool != null) {
-            discoveryPool.shutdownNow();
-        }
-        discoveryPool = Executors.newFixedThreadPool(40);
+    private void startBackgroundDiscovery(boolean userInitiated) {
+        final int generation = ++discoveryGeneration;
+        if (discoveryPool != null) discoveryPool.shutdownNow();
+        discoveryPool = Executors.newFixedThreadPool(32);
 
         String last = getPreferencesStore().getString(PREF_LAST_URL, null);
         discoveryPool.execute(() -> {
             if (generation != discoveryGeneration) return;
-
-            // Reconnect automatically to a previously approved table.
             if (last != null && probeOryn(last)) {
-                runOnUiThread(() -> {
-                    if (generation == discoveryGeneration) {
-                        loadOryn(last);
-                    }
-                });
+                if (userInitiated) runOnUiThread(() -> showFoundDialog(last));
                 return;
             }
-
             String local = "http://oryn.local";
             if (probeOryn(local)) {
-                runOnUiThread(() -> showFound(generation, local, "ORYN found via oryn.local"));
+                runOnUiThread(() -> showFoundDialog(local));
                 return;
             }
-
-            scanLocalSubnet(generation);
+            scanLocalSubnet(generation, userInitiated);
         });
     }
 
-    private void scanLocalSubnet(int generation) {
+    private void scanLocalSubnet(int generation, boolean userInitiated) {
         NetworkAddressInfo info = getActiveIpv4();
         if (info == null) {
-            runOnUiThread(() -> showNotFound(generation,
-                    "No local Wi-Fi/Ethernet address was detected."));
+            if (userInitiated) runOnUiThread(() -> Toast.makeText(this, "No local Wi-Fi address detected.", Toast.LENGTH_LONG).show());
             return;
         }
-
         List<String> candidates = subnetCandidates(info);
-        if (candidates.isEmpty()) {
-            runOnUiThread(() -> showNotFound(generation,
-                    "Could not determine the local network range."));
-            return;
-        }
-
         AtomicBoolean found = new AtomicBoolean(false);
-        java.util.concurrent.atomic.AtomicInteger remaining =
-                new java.util.concurrent.atomic.AtomicInteger(candidates.size());
-
+        java.util.concurrent.atomic.AtomicInteger remaining = new java.util.concurrent.atomic.AtomicInteger(candidates.size());
         for (String ip : candidates) {
             discoveryPool.execute(() -> {
                 try {
                     if (generation != discoveryGeneration || found.get()) return;
                     String base = "http://" + ip;
                     if (probeOryn(base) && found.compareAndSet(false, true)) {
-                        runOnUiThread(() -> showFound(generation, base,
-                                "ORYN found on your Wi-Fi"));
+                        runOnUiThread(() -> showFoundDialog(base));
                     }
                 } finally {
-                    if (remaining.decrementAndGet() == 0
-                            && !found.get()
-                            && generation == discoveryGeneration) {
-                        runOnUiThread(() -> showNotFound(generation,
-                                "No ORYN table was found automatically."));
+                    if (remaining.decrementAndGet() == 0 && !found.get() && userInitiated && generation == discoveryGeneration) {
+                        runOnUiThread(() -> Toast.makeText(this, "No ORYN table found. The app remains available offline.", Toast.LENGTH_LONG).show());
                     }
                 }
             });
+        }
+    }
+
+    private void showFoundDialog(String base) {
+        String normalized = normalizeBase(base);
+        new AlertDialog.Builder(this)
+                .setTitle("ORYN table found")
+                .setMessage(normalized + "\n\nConnect this Android app to the table?")
+                .setNegativeButton("Later", null)
+                .setPositiveButton("Connect", (d, w) -> connectToTable(normalized, false))
+                .show();
+    }
+
+    private void connectToTable(String base, boolean verifyFirst) {
+        ExecutorService one = Executors.newSingleThreadExecutor();
+        one.execute(() -> {
+            try {
+                String normalized = normalizeBase(base);
+                if (verifyFirst && !probeOryn(normalized)) {
+                    runOnUiThread(() -> Toast.makeText(this, "No ORYN server responded at " + normalized, Toast.LENGTH_LONG).show());
+                    return;
+                }
+                TableInfo info = fetchTableInfo(normalized);
+                if (info == null) {
+                    runOnUiThread(() -> Toast.makeText(this, "ORYN table information could not be read.", Toast.LENGTH_LONG).show());
+                    return;
+                }
+                getPreferencesStore().edit().putString(PREF_LAST_URL, normalized).apply();
+                runOnUiThread(() -> activateTableInFrontend(normalized, info));
+            } finally {
+                one.shutdown();
+            }
+        });
+    }
+
+    private TableInfo fetchTableInfo(String base) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(base + "/api/table-info").openConnection();
+            c.setConnectTimeout(2500);
+            c.setReadTimeout(2500);
+            c.setUseCaches(false);
+            int code = c.getResponseCode();
+            if (code != 200) return null;
+            String body = readBody(c);
+            JSONObject o = new JSONObject(body);
+            return new TableInfo(o.optString("id", base), o.optString("name", "ORYN"), o.optString("version", ""));
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    private void activateTableInFrontend(String base, TableInfo info) {
+        try {
+            JSONObject table = new JSONObject();
+            table.put("id", info.id);
+            table.put("name", info.name);
+            table.put("appName", "ORYN");
+            table.put("url", base);
+            Uri u = Uri.parse(base);
+            table.put("host", u.getHost());
+            if (u.getPort() > 0) table.put("port", u.getPort());
+            table.put("version", info.version);
+            table.put("isOnline", true);
+            table.put("isCurrent", false);
+
+            String tableJson = table.toString();
+            String js = "(function(){try{" +
+                    "var t=" + tableJson + ";" +
+                    "var k='orynmotion_tables';var a='orynmotion_active_table';" +
+                    "var d={tables:[],activeTableId:t.id};" +
+                    "try{var old=JSON.parse(localStorage.getItem(k)||'{}');if(Array.isArray(old.tables))d.tables=old.tables;}catch(e){}" +
+                    "d.tables=d.tables.filter(function(x){return x.id!==t.id && x.id!=='oryn-mobile-local';});" +
+                    "d.tables.unshift(t);localStorage.setItem(k,JSON.stringify(d));localStorage.setItem(a,t.id);" +
+                    "location.reload();" +
+                    "}catch(e){console.error(e);}})();";
+            webView.evaluateJavascript(js, null);
+            Toast.makeText(this, "Connected to " + info.name, Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Could not activate ORYN table.", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -424,21 +372,14 @@ public class MainActivity extends Activity {
         try {
             URL url = new URL(normalizeBase(base) + "/api/app-name");
             c = (HttpURLConnection) url.openConnection();
-            c.setConnectTimeout(650);
-            c.setReadTimeout(650);
+            c.setConnectTimeout(800);
+            c.setReadTimeout(800);
             c.setUseCaches(false);
             c.setRequestProperty("Accept", "application/json");
             int code = c.getResponseCode();
             if (code != 200) return false;
-
-            BufferedReader br = new BufferedReader(
-                    new InputStreamReader(c.getInputStream()));
-            StringBuilder body = new StringBuilder();
-            String line;
-            while ((line = br.readLine()) != null) body.append(line);
-            br.close();
-
-            return body.toString().toUpperCase(Locale.US).contains("ORYN");
+            String body = readBody(c);
+            return body.toUpperCase(Locale.US).contains("ORYN");
         } catch (Exception ignored) {
             return false;
         } finally {
@@ -446,120 +387,39 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void showFound(int generation, String base, String message) {
-        if (generation != discoveryGeneration) return;
-        pendingFoundUrl = normalizeBase(base);
-        spinner.setVisibility(View.GONE);
-        status.setText("ORYN found");
-        detail.setText(message + "\n" + pendingFoundUrl);
-        primaryButton.setText("Connect");
-        primaryButton.setVisibility(View.VISIBLE);
-        primaryButton.setOnClickListener(v -> loadOryn(pendingFoundUrl));
-        secondaryButton.setVisibility(View.VISIBLE);
+    private static String readBody(HttpURLConnection c) throws Exception {
+        BufferedReader br = new BufferedReader(new InputStreamReader(c.getInputStream()));
+        StringBuilder body = new StringBuilder();
+        String line;
+        while ((line = br.readLine()) != null) body.append(line);
+        br.close();
+        return body.toString();
     }
 
-    private void showNotFound(int generation, String reason) {
-        if (generation != discoveryGeneration) return;
-        spinner.setVisibility(View.GONE);
-        status.setText("ORYN not found");
-        detail.setText(reason + "\nMake sure the phone and Pi are on the same Wi-Fi.");
-        primaryButton.setText("Search again");
-        primaryButton.setVisibility(View.VISIBLE);
-        primaryButton.setOnClickListener(v -> startDiscovery());
-        secondaryButton.setVisibility(View.VISIBLE);
-    }
-
-    private void showOffline(String heading, String message) {
-        runOnUiThread(() -> {
-            spinner.setVisibility(View.GONE);
-            status.setText(heading);
-            detail.setText(message);
-            primaryButton.setText("Reconnect");
-            primaryButton.setVisibility(View.VISIBLE);
-            primaryButton.setOnClickListener(v -> startDiscovery());
-            secondaryButton.setVisibility(View.VISIBLE);
-            overlay.setVisibility(View.VISIBLE);
-        });
-    }
-
-    private void loadOryn(String base) {
-        currentBaseUrl = normalizeBase(base);
-        getPreferencesStore().edit().putString(PREF_LAST_URL, currentBaseUrl).apply();
-        pendingFoundUrl = null;
-
-        spinner.setVisibility(View.VISIBLE);
-        status.setText("Connecting…");
-        detail.setText(currentBaseUrl);
-        primaryButton.setVisibility(View.GONE);
-        secondaryButton.setVisibility(View.GONE);
-        overlay.setVisibility(View.VISIBLE);
-
-        webView.loadUrl(currentBaseUrl + "/");
-    }
-
-    private void showManualAddressDialog() {
-        final EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setHint("oryn.local or 192.168.0.224");
-        input.setTextColor(Color.BLACK);
-        input.setHintTextColor(Color.DKGRAY);
-        input.setPadding(dp(14), dp(8), dp(14), dp(8));
-
-        new AlertDialog.Builder(this)
-                .setTitle("Connect to ORYN")
-                .setMessage("Enter the Raspberry Pi hostname or IP address.")
-                .setView(input)
-                .setNegativeButton("Cancel", null)
-                .setPositiveButton("Connect", (dialog, which) -> {
-                    String value = input.getText().toString().trim();
-                    if (value.isEmpty()) return;
-                    String base = normalizeBase(value);
-                    spinner.setVisibility(View.VISIBLE);
-                    status.setText("Checking ORYN…");
-                    detail.setText(base);
-
-                    int generation = ++discoveryGeneration;
-                    if (discoveryPool != null) discoveryPool.shutdownNow();
-                    discoveryPool = Executors.newFixedThreadPool(4);
-                    discoveryPool.execute(() -> {
-                        if (probeOryn(base)) {
-                            runOnUiThread(() -> showFound(generation, base,
-                                    "ORYN confirmed at this address"));
-                        } else {
-                            runOnUiThread(() -> showNotFound(generation,
-                                    "No ORYN server responded at " + base));
-                        }
-                    });
-                })
-                .show();
+    private void requestNearbyPermissionIfUseful() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.NEARBY_WIFI_DEVICES}, NEARBY_PERMISSION_REQUEST);
+        }
     }
 
     private String normalizeBase(String value) {
         String v = value.trim();
-        if (!v.startsWith("http://") && !v.startsWith("https://")) {
-            v = "http://" + v;
-        }
+        if (!v.startsWith("http://") && !v.startsWith("https://")) v = "http://" + v;
         while (v.endsWith("/")) v = v.substring(0, v.length() - 1);
         return v;
     }
 
     private NetworkAddressInfo getActiveIpv4() {
         try {
-            ConnectivityManager cm =
-                    (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
             Network network = cm.getActiveNetwork();
             if (network == null) return null;
             LinkProperties lp = cm.getLinkProperties(network);
             if (lp == null) return null;
-
             for (LinkAddress la : lp.getLinkAddresses()) {
                 InetAddress address = la.getAddress();
-                if (address instanceof Inet4Address
-                        && !address.isLoopbackAddress()
-                        && !address.isLinkLocalAddress()) {
-                    return new NetworkAddressInfo(
-                            (Inet4Address) address,
-                            la.getPrefixLength());
+                if (address instanceof Inet4Address && !address.isLoopbackAddress() && !address.isLinkLocalAddress()) {
+                    return new NetworkAddressInfo((Inet4Address) address, la.getPrefixLength());
                 }
             }
         } catch (Exception ignored) {}
@@ -569,71 +429,39 @@ public class MainActivity extends Activity {
     private List<String> subnetCandidates(NetworkAddressInfo info) {
         List<String> out = new ArrayList<>();
         byte[] b = info.address.getAddress();
-        int ip = ((b[0] & 0xff) << 24)
-                | ((b[1] & 0xff) << 16)
-                | ((b[2] & 0xff) << 8)
-                | (b[3] & 0xff);
-
+        int ip = ((b[0] & 0xff) << 24) | ((b[1] & 0xff) << 16) | ((b[2] & 0xff) << 8) | (b[3] & 0xff);
         int prefix = info.prefixLength;
-        // Keep discovery bounded and fast. Networks larger than /23 are
-        // intentionally scanned as the phone's local /24.
         if (prefix < 23 || prefix > 30) prefix = 24;
-
-        int mask = prefix == 0 ? 0 : (int) (0xffffffffL << (32 - prefix));
+        int mask = (int) (0xffffffffL << (32 - prefix));
         int network = ip & mask;
         int broadcast = network | ~mask;
-
         int count = 0;
-        for (int candidate = network + 1;
-             candidate < broadcast && count < 510;
-             candidate++, count++) {
+        for (int candidate = network + 1; candidate < broadcast && count < 510; candidate++, count++) {
             if (candidate == ip) continue;
-            out.add(String.format(Locale.US, "%d.%d.%d.%d",
-                    (candidate >>> 24) & 0xff,
-                    (candidate >>> 16) & 0xff,
-                    (candidate >>> 8) & 0xff,
-                    candidate & 0xff));
+            out.add(String.format(Locale.US, "%d.%d.%d.%d", (candidate >>> 24) & 0xff, (candidate >>> 16) & 0xff, (candidate >>> 8) & 0xff, candidate & 0xff));
         }
         return out;
     }
 
-    private SharedPreferences getPreferencesStore() {
-        return getSharedPreferences(PREFS, MODE_PRIVATE);
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
+    private SharedPreferences getPreferencesStore() { return getSharedPreferences(PREFS, MODE_PRIVATE); }
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 
     @Override
     public void onBackPressed() {
-        if (overlay.getVisibility() == View.VISIBLE
-                && webView.getVisibility() == View.VISIBLE) {
-            overlay.setVisibility(View.GONE);
-            return;
-        }
-        if (webView.canGoBack()) {
-            webView.goBack();
-        } else if (webView.getVisibility() == View.VISIBLE) {
-            new AlertDialog.Builder(this)
-                    .setTitle("Close ORYN?")
-                    .setMessage("Disconnect this mobile view?")
-                    .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Close", (d, w) -> finish())
-                    .show();
-        } else {
-            super.onBackPressed();
-        }
+        if (webView.canGoBack()) webView.goBack();
+        else new AlertDialog.Builder(this)
+                .setTitle("Close ORYN?")
+                .setMessage("The Android app can be opened again without a table connection.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Close", (d, w) -> finish())
+                .show();
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == FILE_CHOOSER_REQUEST) {
             Uri[] results = null;
-            if (resultCode == Activity.RESULT_OK && data != null) {
-                Uri uri = data.getData();
-                if (uri != null) results = new Uri[]{uri};
-            }
+            if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) results = new Uri[]{data.getData()};
             if (filePathCallback != null) {
                 filePathCallback.onReceiveValue(results);
                 filePathCallback = null;
@@ -647,20 +475,17 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         discoveryGeneration++;
         if (discoveryPool != null) discoveryPool.shutdownNow();
-        if (webView != null) {
-            webView.stopLoading();
-            webView.destroy();
-        }
+        if (localServer != null) localServer.stop();
+        if (webView != null) { webView.stopLoading(); webView.destroy(); }
         super.onDestroy();
     }
 
     private static class NetworkAddressInfo {
-        final Inet4Address address;
-        final int prefixLength;
-
-        NetworkAddressInfo(Inet4Address address, int prefixLength) {
-            this.address = address;
-            this.prefixLength = prefixLength;
-        }
+        final Inet4Address address; final int prefixLength;
+        NetworkAddressInfo(Inet4Address address, int prefixLength) { this.address = address; this.prefixLength = prefixLength; }
+    }
+    private static class TableInfo {
+        final String id, name, version;
+        TableInfo(String id, String name, String version) { this.id = id; this.name = name; this.version = version; }
     }
 }
