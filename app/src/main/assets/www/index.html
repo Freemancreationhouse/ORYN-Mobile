@@ -23,6 +23,29 @@
 
     <title>ORYN</title>
 
+    <!-- ORYN Android true-standalone boot: always start against the APK-local
+         runtime. A table becomes the active backend only after the user taps
+         Connect Table. This executes before the compiled ORYN frontend. -->
+    <script>
+      (function () {
+        try {
+          var local = {
+            id: 'oryn-mobile-local',
+            name: 'ORYN Mobile',
+            appName: 'ORYN',
+            url: window.location.origin,
+            host: window.location.hostname,
+            port: Number(window.location.port || 8765),
+            version: '3.0.0-mobile',
+            isOnline: true,
+            isCurrent: true
+          };
+          localStorage.setItem('orynmotion_tables', JSON.stringify({tables:[local], activeTableId:local.id}));
+          localStorage.setItem('orynmotion_active_table', local.id);
+        } catch (e) {}
+      })();
+    </script>
+
     <!-- Check for custom favicon -->
     <script>
       // Get base URL for active table (supports multi-table connections)
