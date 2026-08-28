@@ -3,6 +3,7 @@ name: Build ORYN Mobile APK
 on:
   workflow_dispatch:
   push:
+    branches: [ "main" ]
     paths:
       - 'app/**'
       - 'build.gradle'
@@ -15,44 +16,92 @@ permissions:
 
 jobs:
   build:
+    name: Build standalone Android APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
-      - name: Setup Java 17
+      - name: Set up Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle 8.9
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install required Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.13'
+          cache-provider: basic
 
-      - name: Verify Android project root
+      - name: Preflight project validation
+        shell: bash
         run: |
+          set -euo pipefail
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Commit: $GITHUB_SHA"
           pwd
+          java -version
+          gradle --version
+          sdkmanager --list_installed | grep -E 'platforms;android-36|build-tools;35.0.0' || true
           test -f settings.gradle
           test -f build.gradle
+          test -f gradle.properties
           test -f app/build.gradle
-          echo "ORYN Mobile Android project found at repository root."
+          test -f app/src/main/AndroidManifest.xml
+          test -f app/src/main/java/house/freeman/orynmobile/MainActivity.java
+          test -f app/src/main/assets/app/index.html
+          test -f app/src/main/assets/app/app.js
+          test -f app/src/main/assets/app/patterns.json
+          node --check app/src/main/assets/app/app.js
+          python3 -m json.tool app/src/main/assets/app/patterns.json >/dev/null
+          echo "ORYN Mobile preflight passed."
 
-      - name: Build release APK
-        run: gradle assembleRelease --stacktrace --no-daemon
-
-      - name: Prepare APK artifact
+      - name: Build installable APK
+        shell: bash
         run: |
-          test -f app/build/outputs/apk/release/app-release.apk
-          cp app/build/outputs/apk/release/app-release.apk \
-             app/build/outputs/apk/release/ORYN-Mobile-Standalone-v1.apk
+          set -o pipefail
+          gradle clean :app:assembleDebug --stacktrace --warning-mode all --no-daemon 2>&1 | tee android-build.log
 
-      - name: Upload ORYN Mobile APK
+      - name: Verify and name APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          cp "$APK" "ORYN-Mobile-Standalone-v1.2.apk"
+          sha256sum "ORYN-Mobile-Standalone-v1.2.apk" | tee APK-SHA256.txt
+          ls -lh "ORYN-Mobile-Standalone-v1.2.apk"
+
+      - name: Upload installable ORYN APK
         uses: actions/upload-artifact@v4
         with:
-          name: ORYN-Mobile-Standalone-v1-APK
-          path: app/build/outputs/apk/release/ORYN-Mobile-Standalone-v1.apk
+          name: ORYN-Mobile-Standalone-v1.2-APK
+          path: |
+            ORYN-Mobile-Standalone-v1.2.apk
+            APK-SHA256.txt
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload build diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ORYN-Mobile-build-diagnostics
+          path: |
+            android-build.log
+            app/build/reports/**
+          if-no-files-found: ignore
+          retention-days: 14

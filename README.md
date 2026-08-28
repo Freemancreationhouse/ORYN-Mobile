@@ -1,21 +1,40 @@
-# ORYN Mobile Standalone v1
+# ORYN Mobile Standalone V1.2
 
-Standalone Android client built from the locked ORYN Pi baseline:
+Standalone Android client for the locked ORYN Pi API baseline:
+
 - Pattern Forge: PF-PRO-V10.4.1-20260828-1
-- Motion: UC-DUNE-MOTION-V9-20260827-1
+- Motion core: UC-DUNE-MOTION-V9-20260827-1
 
-## Standalone behavior
-The app launches from local Android assets. It does **not** load `oryn.local` as its UI and does not require a table to open. The 100-pattern library, thumbnails, favorites/playlists, control screens, LED screen and settings are available before connection.
+The app UI and pattern library are packaged inside the APK. The app opens and browses locally even when no ORYN table is connected. Network access is used only for discovery and table control.
 
-## Connection
-- Automatically scans the current Wi-Fi LAN for an ORYN table.
-- Tries `oryn.local` first.
-- Manual host/IP connection is available.
-- Remembers the last successful table.
+## GitHub repository layout
 
-## Connected actions
-Pattern playback, HOME/Centre/Perimeter/Stop, LED commands and machine-profile reads use the locked ORYN HTTP API only after a table is connected.
+This package is intended to be the ROOT of the `ORYN-Mobile` repository:
 
-## Build
-This directory is a normal Android Gradle project. `gradle assembleRelease` creates `app-release.apk`.
-The included GitHub Actions workflow builds an installable APK artifact after the project is placed in the repository as `/mobile`.
+```
+ORYN-Mobile/
+  .github/workflows/android-apk.yml
+  app/
+  build.gradle
+  settings.gradle
+  gradle.properties
+```
+
+Do not nest it inside another `mobile/` directory.
+
+## Automated APK build
+
+The GitHub workflow pins:
+
+- JDK 17
+- Android Gradle Plugin 8.13.2
+- Gradle 8.13
+- Android API 36
+- Android SDK Build Tools 35.0.0
+
+The first validation build intentionally creates a debug-signed APK because it is directly installable and does not require release-keystore secrets.
+
+Artifact name: `ORYN-Mobile-Standalone-v1.2-APK`
+APK: `ORYN-Mobile-Standalone-v1.2.apk`
+
+If the build fails, the workflow also uploads `ORYN-Mobile-build-diagnostics` containing `android-build.log` when available.
