@@ -5,8 +5,11 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
 import android.provider.Settings;
 import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
@@ -41,9 +44,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends Activity {
     private static final String APP_HOST = "app.oryn";
+    private static final int FILE_CHOOSER_REQUEST = 7001;
     private WebView webView;
+    private ValueCallback<Uri[]> fileChooserCallback;
     private final ExecutorService discoveryLauncher = Executors.newSingleThreadExecutor();
     private final AtomicBoolean discoveryRunning = new AtomicBoolean(false);
+    private final AtomicBoolean freshLaunchPending = new AtomicBoolean(true);
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -57,7 +63,9 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
         s.setAllowFileAccess(false);
-        s.setAllowContentAccess(false);
+        // Pattern Forge uses Android's system document picker (content:// URI).
+        // Keep raw file:// access disabled, but allow the picker-granted content URI.
+        s.setAllowContentAccess(true);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setBuiltInZoomControls(false);
@@ -65,8 +73,71 @@ public class MainActivity extends Activity {
         s.setTextZoom(100);
         webView.setBackgroundColor(Color.rgb(10,10,10));
         webView.addJavascriptInterface(new OrynAndroidBridge(), "OrynAndroid");
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams params) {
+                if (fileChooserCallback != null) fileChooserCallback.onReceiveValue(null);
+                fileChooserCallback = callback;
+                Intent intent;
+                try {
+                    intent = params != null ? params.createIntent() : null;
+                } catch (Exception ignored) {
+                    intent = null;
+                }
+                if (intent == null) {
+                    intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("*/*");
+                    intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                            "image/png", "image/jpeg", "image/webp", "image/bmp",
+                            "image/svg+xml", "text/plain", "application/octet-stream"
+                    });
+                }
+                try {
+                    startActivityForResult(Intent.createChooser(intent, "Choose artwork for ORYN Pattern Forge"), FILE_CHOOSER_REQUEST);
+                    return true;
+                } catch (Exception e) {
+                    fileChooserCallback = null;
+                    callback.onReceiveValue(null);
+                    return false;
+                }
+            }
+        });
         webView.setWebViewClient(new LocalAssetClient());
+
+        // Android 15 targets are edge-to-edge by default. Keep ORYN controls above
+        // the phone status/navigation bars instead of letting the bottom action
+        // button sit under the system navigation controls.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            webView.setOnApplyWindowInsetsListener((v, insets) -> {
+                int top = insets.getSystemWindowInsetTop();
+                int bottom = insets.getSystemWindowInsetBottom();
+                v.setPadding(0, top, 0, bottom);
+                return insets;
+            });
+        }
         webView.loadUrl("http://" + APP_HOST + "/");
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == FILE_CHOOSER_REQUEST) {
+            ValueCallback<Uri[]> callback = fileChooserCallback;
+            fileChooserCallback = null;
+            if (callback != null) {
+                Uri[] result = null;
+                if (resultCode == Activity.RESULT_OK) {
+                    result = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+                    // A few Android document providers omit parseResult data but
+                    // still return a single data URI. Preserve that selection.
+                    if ((result == null || result.length == 0) && data != null && data.getData() != null) {
+                        result = new Uri[]{data.getData()};
+                    }
+                }
+                callback.onReceiveValue(result);
+            }
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
     }
 
     @Override public void onBackPressed() {
@@ -119,7 +190,8 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-mobile1"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-mobile3"; }
+        @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
                 try { startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS)); }
@@ -223,11 +295,20 @@ public class MainActivity extends Activity {
             JSONObject info=new JSONObject(sb.toString());
             if (info.optString("id").isEmpty() || info.optString("name").isEmpty()) return null;
             JSONObject out=new JSONObject();
-            out.put("id",info.optString("id")); out.put("name",info.optString("name")); out.put("url",base);
+            out.put("id",info.optString("id")); out.put("name",orynDisplayName(info.optString("name"))); out.put("url",base);
             out.put("host",new URL(base).getHost()); out.put("version",info.optString("version",null)); out.put("isOnline",true); out.put("isCurrent",false);
             return out;
         } catch (Exception ignored) { return null; }
         finally { if (c!=null) c.disconnect(); }
+    }
+
+    private String orynDisplayName(String raw) {
+        String name = raw == null ? "" : raw.trim();
+        if (name.isEmpty()) return "ORYN";
+        name = name.replaceAll("(?i)UC[-_ ]DUNE[-_ ]MOTION", "UC-ORYN-MOTION");
+        name = name.replaceAll("(?i)DUNE\\s*MOTION", "ORYN");
+        if (name.equalsIgnoreCase("dune")) return "ORYN";
+        return name;
     }
 
     private void deliverDiscovery(java.util.Collection<JSONObject> tables) {

@@ -273,3 +273,62 @@ label:has(input[name="preExecutionAction"]:checked) * {
 .oryn-ff-source-box.has-source img{display:none!important;}
 .oryn-ff-field select{width:100%;height:39px;background:#0B0D10;color:#fff;border:1px solid #353A40;border-radius:9px;padding:0 10px;}
 @media(max-width:800px){.oryn-ff-source-box{height:240px!important;min-height:240px!important;}}
+
+
+/* =====================================================================
+   ORYN ANDROID MOBILE2 — Pattern Forge phone layout + file picker patch
+   UI only. No motion/calibration/controller logic is changed.
+   ===================================================================== */
+.oryn-ff-drop{
+  width:100%;text-align:left;font:inherit;color:inherit;
+  -webkit-appearance:none;appearance:none;
+}
+#oryn-final-forge,#oryn-final-forge *{box-sizing:border-box;}
+.oryn-ff-grid,.oryn-ff-left,.oryn-ff-right,.oryn-ff-source,.oryn-ff-canvas-wrap,.oryn-ff-disc{min-width:0;max-width:100%;}
+
+@media(max-width:820px){
+  #oryn-final-forge-overlay{
+    padding:0!important;align-items:stretch!important;justify-content:stretch!important;
+    overflow:hidden!important;background:#0e1114!important;
+  }
+  #oryn-final-forge{
+    width:100%!important;max-width:100%!important;height:100%!important;max-height:none!important;
+    border-radius:0!important;border-left:0!important;border-right:0!important;
+  }
+  .oryn-ff-head{
+    padding:14px 15px!important;gap:10px!important;
+  }
+  .oryn-ff-title{font-size:19px!important;}
+  .oryn-ff-sub{font-size:10px!important;line-height:1.45!important;overflow-wrap:anywhere;}
+  .oryn-ff-close{flex:0 0 42px;width:42px!important;height:42px!important;}
+  .oryn-ff-grid{
+    display:block!important;width:100%!important;overflow-y:auto!important;overflow-x:hidden!important;
+    overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+    padding-bottom:max(18px,env(safe-area-inset-bottom));
+  }
+  .oryn-ff-left,.oryn-ff-right{
+    width:100%!important;max-width:100%!important;height:auto!important;min-height:0!important;
+    overflow:visible!important;padding:16px!important;border-right:0!important;
+  }
+  .oryn-ff-left{border-bottom:1px solid #2c3035!important;padding-bottom:22px!important;}
+  .oryn-ff-right{padding-top:18px!important;padding-bottom:28px!important;}
+  .oryn-ff-actions{
+    position:static!important;display:grid!important;grid-template-columns:1fr!important;
+    margin:18px 0 0!important;padding:0!important;background:none!important;
+  }
+  .oryn-ff-btn{width:100%!important;min-height:48px!important;}
+  .oryn-ff-source-box{
+    width:100%!important;height:auto!important;min-height:0!important;aspect-ratio:4/3!important;
+  }
+  .oryn-ff-output-head{align-items:flex-start!important;flex-direction:column!important;}
+  .oryn-ff-stats{justify-content:flex-start!important;max-width:100%!important;}
+  .oryn-ff-canvas-wrap{
+    width:100%!important;min-height:0!important;padding:8px!important;display:block!important;
+  }
+  .oryn-ff-disc{
+    width:100%!important;max-width:520px!important;height:auto!important;aspect-ratio:1/1!important;
+    margin:0 auto!important;
+  }
+  .oryn-ff-empty{padding:18%!important;}
+  .oryn-ff-field input[type="text"],.oryn-ff-field select{font-size:16px!important;}
+}

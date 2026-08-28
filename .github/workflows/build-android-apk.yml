@@ -40,11 +40,11 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN-Mobile-V10.4.1-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN-Mobile-V10.4.1-mobile3-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ORYN-Mobile-V10.4.1-APK
-          path: ORYN-Mobile-V10.4.1-debug.apk
+          name: ORYN-Mobile-V10.4.1-Mobile3-APK
+          path: ORYN-Mobile-V10.4.1-mobile3-debug.apk
           if-no-files-found: error

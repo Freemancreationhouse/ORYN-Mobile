@@ -93,12 +93,12 @@ function openForge(){
 
       <div class="oryn-ff-grid">
         <div class="oryn-ff-left">
-          <label class="oryn-ff-drop">
-            <input id="oryn-ff-file" type="file" hidden accept=".png,.jpg,.jpeg,.webp,.bmp,.svg,.dxf,.gcode,.nc,.ngc,.tap,.thr">
+          <input id="oryn-ff-file" type="file" hidden accept=".png,.jpg,.jpeg,.webp,.bmp,.svg,.dxf,.gcode,.nc,.ngc,.tap,.thr,image/*">
+          <button id="oryn-ff-choose" class="oryn-ff-drop" type="button">
             <b>Choose artwork</b>
             <small>Photo, painting, line art, vector/CAD, G-code or existing THR</small>
             <div id="oryn-ff-file-name" class="oryn-ff-file">No file selected</div>
-          </label>
+          </button>
 
           <div class="oryn-ff-field"><label>Pattern name</label><input id="oryn-ff-name" type="text" placeholder="My ORYN pattern"></div>
 
@@ -201,6 +201,8 @@ function openForge(){
   q('.oryn-ff-close').onclick=closeForge;
   q('#oryn-final-forge-overlay').onclick=e=>{if(e.target.id==='oryn-final-forge-overlay')closeForge()};
 
+  q('#oryn-ff-choose').onclick=()=>q('#oryn-ff-file').click();
+
   q('#oryn-ff-file').onchange=e=>{
     cleanupSource();
     forge.file=e.target.files?.[0]||null;forge.preview=null;
@@ -251,6 +253,7 @@ function openForge(){
 
 async function generateForge(){
   if(!forge.file)return forgeStatus('Choose an artwork file first.',true);
+  if(!apiBase())return forgeStatus('Connect to your ORYN table to generate the machine-ready route. Artwork selection and preview stay available on the phone.',true);
   setForgeBusy(true);forgeStatus('');
   try{
     const fd=new FormData();

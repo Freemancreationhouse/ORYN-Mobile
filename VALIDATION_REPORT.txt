@@ -1,10 +1,10 @@
 ORYN ANDROID STANDALONE - VALIDATION REPORT
 ===========================================
-Android mobile branch: ORYN-ANDROID-STANDALONE-1.0.0
+Android mobile branch: ORYN-ANDROID-STANDALONE-1.0.2
 Locked source baseline: PF-PRO-V10.4.1-20260828-1
-Locked Pi motion baseline: UC-DUNE-MOTION-V9-20260827-1 (not modified)
+Locked Pi motion baseline: UC-ORYN-MOTION-V9-20260827-1 (not modified)
 Application ID: com.studiokinematics.oryn
-Version: 10.4.1-mobile1
+Version: 10.4.1-mobile3
 minSdk: 26
 compileSdk/targetSdk: 35
 
@@ -23,6 +23,14 @@ Native Android functionality:
 - Offline library, previews, local settings/favorites/playlists
 - Real machine-changing API calls require/select the remote ORYN table
 
+Mobile3 targeted fixes:
+- Native Android WebView file chooser installed for Pattern Forge artwork selection
+- Picker-granted content:// access enabled; raw file:// access remains disabled
+- Pattern Forge mobile layout constrained to full phone width with no horizontal crop
+- Bottom navigation/status bar insets applied to WebView
+- Connected-table legacy Dune Motion branding sanitized to ORYN in the mobile UI
+- Pattern Forge custom overlay JS passed `node --check`
+
 Static validation performed in build workspace:
 - AndroidManifest.xml parsed successfully
 - res/xml/network_security_config.xml parsed successfully
@@ -37,3 +45,8 @@ The build container used to generate this project does not include the Android S
 Android build-tools, or Gradle, and cannot download those binaries. Therefore an APK
 binary was not fabricated or mislabeled. The project is supplied as a real Android
 Studio/Gradle project plus local and GitHub Actions build paths.
+
+Mobile3 cold-start fix:
+- Fresh Android launch forces embedded offline library active before the main UI bundle initializes.
+- Automatic discovery does not auto-connect.
+- Remembered remote tables remain available for explicit connection.
