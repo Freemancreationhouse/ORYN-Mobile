@@ -1,27 +1,21 @@
-plugins {
-    id 'com.android.application'
-}
+plugins { id 'com.android.application' }
 
 android {
-    namespace 'com.studiokinematics.oryn'
-    compileSdk 36
+    namespace 'house.freeman.orynmobile'
+    compileSdk 35
 
     defaultConfig {
-        applicationId "com.studiokinematics.oryn"
-        minSdk 26
-        targetSdk 36
-        versionCode 3
-        versionName "3.0.0"
+        applicationId 'house.freeman.orynmobile'
+        minSdk 23
+        targetSdk 28
+        versionCode 1
+        versionName '1.0.0'
     }
 
     buildTypes {
         release {
             minifyEnabled false
+            signingConfig signingConfigs.debug
         }
-    }
-
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
     }
 }

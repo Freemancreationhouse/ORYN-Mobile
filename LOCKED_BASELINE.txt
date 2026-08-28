@@ -1,0 +1,6 @@
+ORYN MOBILE SOURCE BASELINE
+Pi Pattern Forge: PF-PRO-V10.4.1-20260828-1
+Pi Motion: UC-DUNE-MOTION-V9-20260827-1
+Source package: ORYN_PI_PATTERN_FORGE_PRO_V10_4_1_HOTFIX(1).zip
+
+The mobile client does not modify or replace the Pi code. It communicates through the published ORYN API.

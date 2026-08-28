@@ -1,5 +1,0 @@
-Source inspected: ORYN.zip (locked Pi project supplied by user)
-SHA256: d6637e83ce870287daf21f722215ea39e044a99171bfe9e7cd50c8fb797dc359
-Android project is separate and does not modify the Pi project.
-Discovery verification endpoint: GET /api/app-name -> ORYN
-Table identity endpoint: GET /api/table-info
