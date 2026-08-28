@@ -1,0 +1,39 @@
+ORYN ANDROID STANDALONE - VALIDATION REPORT
+===========================================
+Android mobile branch: ORYN-ANDROID-STANDALONE-1.0.0
+Locked source baseline: PF-PRO-V10.4.1-20260828-1
+Locked Pi motion baseline: UC-DUNE-MOTION-V9-20260827-1 (not modified)
+Application ID: com.studiokinematics.oryn
+Version: 10.4.1-mobile1
+minSdk: 26
+compileSdk/targetSdk: 35
+
+Embedded locally in Android app assets:
+- Original compiled ORYN frontend and final custom overlays
+- 100 THR pattern files
+- 100 cached WEBP pattern previews
+- Pattern metadata catalog
+- ORYN icons/assets/fonts
+
+Native Android functionality:
+- App opens from local APK assets, not from the Pi website
+- ORYN discovery tries oryn.local, then scans private /24 networks on ports 8080 and 80
+- Manual table URL connection remains available
+- Android Wi-Fi settings shortcut
+- Offline library, previews, local settings/favorites/playlists
+- Real machine-changing API calls require/select the remote ORYN table
+
+Static validation performed in build workspace:
+- AndroidManifest.xml parsed successfully
+- res/xml/network_security_config.xml parsed successfully
+- res/values/themes.xml parsed successfully
+- res/values/strings.xml parsed successfully
+- offline/oryn-mobile-bootstrap.js passed `node --check`
+- 100 THR assets present
+- 100 WEBP preview assets present
+
+Environment limitation:
+The build container used to generate this project does not include the Android SDK,
+Android build-tools, or Gradle, and cannot download those binaries. Therefore an APK
+binary was not fabricated or mislabeled. The project is supplied as a real Android
+Studio/Gradle project plus local and GitHub Actions build paths.
