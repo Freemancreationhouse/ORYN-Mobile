@@ -16,6 +16,9 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.view.ViewGroup;
+import android.view.WindowInsets;
+import android.widget.FrameLayout;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -49,6 +52,7 @@ public class MainActivity extends Activity {
     private static final int FILE_CHOOSER_REQUEST = 7001;
     private static final int SAVE_FILE_REQUEST = 7002;
     private WebView webView;
+    private FrameLayout rootView;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingSaveName;
     private String pendingSaveMime;
@@ -63,8 +67,17 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(Color.rgb(10,10,10));
         getWindow().setNavigationBarColor(Color.rgb(10,10,10));
 
+        // Keep the WebView inside an inset-aware native container.  On Android 15
+        // (targetSdk 35), edge-to-edge is enforced and WebView padding alone does
+        // not reliably shrink the CSS viewport used by position:fixed controls.
+        // Using real layout margins makes the ORYN bottom navigation end above
+        // the phone's gesture / 3-button navigation area on every page.
+        rootView = new FrameLayout(this);
         webView = new WebView(this);
-        setContentView(webView);
+        rootView.addView(webView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        setContentView(rootView);
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -112,16 +125,35 @@ public class MainActivity extends Activity {
         });
         webView.setWebViewClient(new LocalAssetClient());
 
-        // Android 15 targets are edge-to-edge by default. Keep ORYN controls above
-        // the phone status/navigation bars instead of letting the bottom action
-        // button sit under the system navigation controls.
+        // Android 15 targets are edge-to-edge by default. Apply system-bar insets
+        // to the WebView *layout*, not to WebView content padding. Fixed-position
+        // web controls then use the reduced viewport and cannot sit underneath
+        // Android's navigation/gesture bar.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            webView.setOnApplyWindowInsetsListener((v, insets) -> {
-                int top = insets.getSystemWindowInsetTop();
-                int bottom = insets.getSystemWindowInsetBottom();
-                v.setPadding(0, top, 0, bottom);
+            rootView.setOnApplyWindowInsetsListener((v, insets) -> {
+                int left, top, right, bottom;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+                    left = bars.left;
+                    top = bars.top;
+                    right = bars.right;
+                    bottom = bars.bottom;
+                } else {
+                    left = insets.getSystemWindowInsetLeft();
+                    top = insets.getSystemWindowInsetTop();
+                    right = insets.getSystemWindowInsetRight();
+                    bottom = insets.getSystemWindowInsetBottom();
+                }
+
+                FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) webView.getLayoutParams();
+                if (lp.leftMargin != left || lp.topMargin != top ||
+                        lp.rightMargin != right || lp.bottomMargin != bottom) {
+                    lp.setMargins(left, top, right, bottom);
+                    webView.setLayoutParams(lp);
+                }
                 return insets;
             });
+            rootView.requestApplyInsets();
         }
         webView.loadUrl("http://" + APP_HOST + "/");
     }

@@ -8,8 +8,8 @@ android {
         applicationId 'com.studiokinematics.oryn'
         minSdk 26
         targetSdk 35
-        versionCode 1040103
-        versionName '10.4.1-mobile4-pd'
+        versionCode 1040104
+        versionName '10.4.1-mobile4-pd-safearea1'
     }
 
     buildTypes {
