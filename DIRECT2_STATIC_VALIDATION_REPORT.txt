@@ -1,0 +1,31 @@
+ORYN DIRECT ESP32 DIRECT2 + PATTERN DESIGNER STATIC VALIDATION
+
+Generator count: 77 total / 37 reference-set / 40 ORYN originals
+
+direct_probe: PASS
+direct_stream: PASS
+direct_pause: PASS
+direct_resume: PASS
+direct_stop: PASS
+native_custom_save: PASS
+native_custom_list: PASS
+android_export: PASS
+safe_area: PASS
+theta_formula_native: PASS
+rho_formula_native: PASS
+theta_formula_js: PASS
+rho_formula_js: PASS
+pd_save_endpoint: PASS
+dynamic_custom_catalog: PASS
+custom_play_path: PASS
+direct_table: PASS
+
+JS syntax was checked with Node for:
+- offline/oryn-mobile-bootstrap.js
+- static/pattern-designer/app.js
+- static/custom/oryn-pattern-designer-mobile.js
+
+Java source was passed through javac parsing; only expected missing Android SDK/symbol errors occurred in this Linux environment, with no syntax-like parser errors.
+
+PHYSICAL TEST REQUIRED:
+The Direct ESP32 motion path must be tested on the real table at conservative feed before this branch is locked.

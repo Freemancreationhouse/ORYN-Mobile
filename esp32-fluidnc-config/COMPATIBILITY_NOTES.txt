@@ -1,0 +1,18 @@
+SOURCE / COMPATIBILITY NOTES
+
+This controller package is based on the 28BYJ-48 FluidNC configuration already present
+inside the locked ORYN Pattern Forge Pro V10.4.1 Hotfix source.
+
+The ORYN application already:
+- detects FluidNC firmware
+- queries X/Y steps_per_mm
+- recognizes 256/210 as the 28BYJ Mini Pro profile
+- sends GRBL-compatible X/Y motion commands
+- performs the Theta/Rho conversion in ORYN
+
+Therefore no new ORYN application-side motion engine is introduced by this package.
+
+Firmware note:
+Official FluidNC unipolar support was removed after the older 3.x implementation.
+For this exact direct ULN2003/5-wire configuration, use FluidNC v3.8.3, which is also
+consistent with the previously proven ORYN controller environment.

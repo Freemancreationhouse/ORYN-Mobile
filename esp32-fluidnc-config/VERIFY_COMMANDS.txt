@@ -1,0 +1,16 @@
+ORYN ESP32 CONTROLLER - QUICK CHECK
+
+$I
+$/axes/x/steps_per_mm
+$/axes/y/steps_per_mm
+?
+
+Expected key values:
+X steps = 256
+Y steps = 210
+
+Very small safe movement:
+G91
+G1 X0.1 F20
+G1 Y0.1 F20
+G90

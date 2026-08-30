@@ -544,7 +544,7 @@ function syncLibraryTarget(){
   const target=selectedORYNTarget();
   if(isORYNMobile&&!target){
     saveLibraryBtn.disabled=true;
-    setSaveMessage('Offline designer is ready. Select/connect an ORYN table in the app to save into its library.','');
+    setSaveMessage('Offline designer is ready. Select ORYN Direct — ESP32 FluidNC (or another ORYN table) to save into its library.','');
   }else if(target){
     saveLibraryBtn.disabled=false;
     setSaveMessage(`Target: ${target.name||target.url}`,'ok');

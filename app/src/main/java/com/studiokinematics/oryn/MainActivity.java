@@ -1,11 +1,25 @@
 package com.studiokinematics.oryn;
 
 import android.app.Activity;
+import android.Manifest;
+import android.content.Context;
+import android.content.pm.PackageManager;
+import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
+import android.net.wifi.ScanResult;
+import android.net.wifi.WifiManager;
+import android.net.wifi.WifiNetworkSpecifier;
 import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.util.Base64;
 import android.webkit.JavascriptInterface;
@@ -24,17 +38,27 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.StringReader;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.io.BufferedWriter;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
@@ -51,6 +75,7 @@ public class MainActivity extends Activity {
     private static final String APP_HOST = "app.oryn";
     private static final int FILE_CHOOSER_REQUEST = 7001;
     private static final int SAVE_FILE_REQUEST = 7002;
+    private static final int WIFI_PERMISSION_REQUEST = 7003;
     private WebView webView;
     private FrameLayout rootView;
     private ValueCallback<Uri[]> fileChooserCallback;
@@ -62,16 +87,39 @@ public class MainActivity extends Activity {
     private final AtomicBoolean discoveryRunning = new AtomicBoolean(false);
     private final AtomicBoolean freshLaunchPending = new AtomicBoolean(true);
 
+    // Direct3 Smart Wi-Fi: ORYN requests a local-only FluidNC Wi-Fi network and
+    // binds ONLY ESP32 sockets to it. The Android default network remains free
+    // for Internet traffic (cellular or primary Wi-Fi where STA concurrency is supported).
+    private WifiManager wifiManager;
+    private ConnectivityManager connectivityManager;
+    private volatile Network directWifiNetwork;
+    private volatile ConnectivityManager.NetworkCallback directWifiCallback;
+    private volatile String directWifiSsid = null;
+    private volatile boolean wifiScanPending = false;
+    private volatile String pendingWifiConnectSsid = null;
+    private volatile String pendingWifiConnectPassword = null;
+
+    // ORYN Direct (experimental): Android talks straight to FluidNC over Wi-Fi/Telnet.
+    private final ExecutorService directExecutor = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean directRunning = new AtomicBoolean(false);
+    private final AtomicBoolean directPaused = new AtomicBoolean(false);
+    private final AtomicBoolean directStopRequested = new AtomicBoolean(false);
+    private volatile Socket directPatternSocket;
+    private volatile String directLastError = "";
+    private volatile String directCurrentFile = null;
+    private volatile int directPoint = 0;
+    private volatile int directTotal = 0;
+    private volatile double directTheta = 0.0;
+    private volatile double directRho = 0.0;
+    private volatile double directSpeed = 60.0;
+
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().setStatusBarColor(Color.rgb(10,10,10));
         getWindow().setNavigationBarColor(Color.rgb(10,10,10));
+        wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
 
-        // Keep the WebView inside an inset-aware native container.  On Android 15
-        // (targetSdk 35), edge-to-edge is enforced and WebView padding alone does
-        // not reliably shrink the CSS viewport used by position:fixed controls.
-        // Using real layout margins makes the ORYN bottom navigation end above
-        // the phone's gesture / 3-button navigation area on every page.
         rootView = new FrameLayout(this);
         webView = new WebView(this);
         rootView.addView(webView, new FrameLayout.LayoutParams(
@@ -125,29 +173,22 @@ public class MainActivity extends Activity {
         });
         webView.setWebViewClient(new LocalAssetClient());
 
-        // Android 15 targets are edge-to-edge by default. Apply system-bar insets
-        // to the WebView *layout*, not to WebView content padding. Fixed-position
-        // web controls then use the reduced viewport and cannot sit underneath
-        // Android's navigation/gesture bar.
+        // Android 15 edge-to-edge safe area: shrink the actual WebView viewport
+        // so ORYN fixed navigation stays above gesture / 3-button system controls.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             rootView.setOnApplyWindowInsetsListener((v, insets) -> {
                 int left, top, right, bottom;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
-                    left = bars.left;
-                    top = bars.top;
-                    right = bars.right;
-                    bottom = bars.bottom;
+                    left = bars.left; top = bars.top; right = bars.right; bottom = bars.bottom;
                 } else {
                     left = insets.getSystemWindowInsetLeft();
                     top = insets.getSystemWindowInsetTop();
                     right = insets.getSystemWindowInsetRight();
                     bottom = insets.getSystemWindowInsetBottom();
                 }
-
                 FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) webView.getLayoutParams();
-                if (lp.leftMargin != left || lp.topMargin != top ||
-                        lp.rightMargin != right || lp.bottomMargin != bottom) {
+                if (lp.leftMargin != left || lp.topMargin != top || lp.rightMargin != right || lp.bottomMargin != bottom) {
                     lp.setMargins(left, top, right, bottom);
                     webView.setLayoutParams(lp);
                 }
@@ -183,22 +224,19 @@ public class MainActivity extends Activity {
                 final String payload = pendingSavePayload;
                 final boolean encoded = pendingSaveBase64;
                 discoveryLauncher.submit(() -> {
-                    boolean ok = false;
-                    String message;
-                    try (OutputStream out = getContentResolver().openOutputStream(uri, "w")) {
-                        if (out == null) throw new IllegalStateException("Could not open selected file");
+                    boolean ok = false; String message;
+                    try (OutputStream outStream = getContentResolver().openOutputStream(uri, "w")) {
+                        if (outStream == null) throw new IllegalStateException("Could not open selected file");
                         byte[] bytes = encoded ? Base64.decode(payload == null ? "" : payload, Base64.DEFAULT)
                                 : (payload == null ? new byte[0] : payload.getBytes(StandardCharsets.UTF_8));
-                        out.write(bytes); out.flush(); ok = true;
+                        outStream.write(bytes); outStream.flush(); ok = true;
                         message = "Saved file: " + (name == null ? "ORYN export" : name);
                     } catch (Exception e) {
                         message = "File save failed: " + e.getMessage();
                     }
                     final boolean result = ok; final String msg = message;
-                    runOnUiThread(() -> {
-                        if (webView != null) webView.evaluateJavascript(
-                                "window.__orynPatternDesignerFileSaved&&window.__orynPatternDesignerFileSaved(" + result + "," + JSONObject.quote(name == null ? "" : name) + "," + JSONObject.quote(msg) + ");", null);
-                    });
+                    runOnUiThread(() -> { if (webView != null) webView.evaluateJavascript(
+                            "window.__orynPatternDesignerFileSaved&&window.__orynPatternDesignerFileSaved(" + result + "," + JSONObject.quote(name == null ? "" : name) + "," + JSONObject.quote(msg) + ");", null); });
                 });
             }
             clearPendingSave();
@@ -213,6 +251,9 @@ public class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         discoveryLauncher.shutdownNow();
+        releaseDirectWifiNetwork();
+        directStop();
+        directExecutor.shutdownNow();
         if (webView != null) { webView.destroy(); webView = null; }
         super.onDestroy();
     }
@@ -257,7 +298,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-mobile4-pd"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3-smartwifi"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
@@ -265,9 +306,347 @@ public class MainActivity extends Activity {
                 catch (Exception e) { startActivity(new Intent(Settings.ACTION_SETTINGS)); }
             });
         }
+        @JavascriptInterface public void scanWifiNetworks() { requestWifiScan(); }
+        @JavascriptInterface public void connectDirectWifi(String ssid, String password) { requestDirectWifiConnection(ssid, password); }
+        @JavascriptInterface public void disconnectDirectWifi() { runOnUiThread(() -> releaseDirectWifiNetwork()); }
+        @JavascriptInterface public String directWifiState() { return getDirectWifiStateJson(); }
+        @JavascriptInterface public String configureFluidNcHomeWifi(String ssid, String password) { return configureFluidNcForHomeWifi(ssid, password); }
+        @JavascriptInterface public void discoverFluidNcLan() { discoverFluidNcOnLanAsync(); }
         @JavascriptInterface public void startDiscovery() { startDiscoveryAsync(); }
         @JavascriptInterface public void saveFile(String filename, String mimeType, String payload, boolean base64) {
             runOnUiThread(() -> beginSaveFile(filename, mimeType, payload, base64));
+        }
+
+        @JavascriptInterface public String directSavePattern(String name, String thr) { return saveDirectPattern(name, thr); }
+        @JavascriptInterface public String directListPatterns() { return listDirectPatterns(); }
+        @JavascriptInterface public String directReadPattern(String path) { return readDirectPattern(path); }
+        @JavascriptInterface public boolean directDeletePattern(String path) { return deleteDirectPattern(path); }
+
+        @JavascriptInterface public String directProbe(String host) {
+            JSONObject out = new JSONObject();
+            try {
+                String r = telnetCommand(host, "$I", 1800);
+                out.put("ok", r.contains("FluidNC") || r.contains("Grbl"));
+                out.put("response", r);
+            } catch (Exception e) {
+                try { out.put("ok", false); out.put("error", e.getMessage()); } catch (Exception ignored) {}
+            }
+            return out.toString();
+        }
+
+        @JavascriptInterface public String directAction(String host, String command) {
+            JSONObject out = new JSONObject();
+            try {
+                String r = telnetCommand(host, command, 2500);
+                out.put("success", !r.toLowerCase().contains("error"));
+                out.put("response", r);
+            } catch (Exception e) {
+                try { out.put("success", false); out.put("detail", e.getMessage()); } catch (Exception ignored) {}
+            }
+            return out.toString();
+        }
+
+        @JavascriptInterface public boolean directStartPattern(String host, String assetPathsJson, double thetaRevUnits, double rhoTravelUnits, double rhoDirection, double feed) {
+            if (!directRunning.compareAndSet(false, true)) return false;
+            directStopRequested.set(false); directPaused.set(false); directLastError = ""; directSpeed = feed;
+            directExecutor.submit(() -> runDirectPattern(host, assetPathsJson, thetaRevUnits, rhoTravelUnits, rhoDirection, feed));
+            return true;
+        }
+
+        @JavascriptInterface public String directStatus() {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("is_running", directRunning.get()); o.put("is_paused", directPaused.get());
+                o.put("current_file", directCurrentFile); o.put("current", directPoint); o.put("total", directTotal);
+                o.put("percentage", directTotal > 0 ? (100.0 * directPoint / directTotal) : 0.0);
+                o.put("theta", directTheta); o.put("rho", directRho); o.put("speed", directSpeed); o.put("error", directLastError);
+            } catch (Exception ignored) {}
+            return o.toString();
+        }
+
+        @JavascriptInterface public void directStopNow() { directStop(); }
+        @JavascriptInterface public void directPauseNow() { directRealtime((byte)'!'); directPaused.set(true); }
+        @JavascriptInterface public void directResumeNow() { directRealtime((byte)'~'); directPaused.set(false); }
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != WIFI_PERMISSION_REQUEST) return;
+        boolean ok = true;
+        for (int r : grantResults) if (r != PackageManager.PERMISSION_GRANTED) ok = false;
+        if (!ok) {
+            wifiScanPending = false;
+            pendingWifiConnectSsid = null;
+            pendingWifiConnectPassword = null;
+            deliverWifiScanError("Wi-Fi permission was not granted. ORYN needs Nearby Wi-Fi / Location permission only to show nearby SSIDs and connect to FluidNC.");
+            return;
+        }
+        if (wifiScanPending) {
+            wifiScanPending = false;
+            performWifiScan();
+        } else if (pendingWifiConnectSsid != null) {
+            String ssid = pendingWifiConnectSsid, pass = pendingWifiConnectPassword;
+            pendingWifiConnectSsid = null; pendingWifiConnectPassword = null;
+            requestDirectWifiConnection(ssid, pass);
+        }
+    }
+
+    private boolean hasWifiScanPermissions() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+        boolean fine = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        if (Build.VERSION.SDK_INT >= 33) {
+            boolean nearby = checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED;
+            return fine && nearby;
+        }
+        return fine;
+    }
+
+    private void requestWifiPermissions(boolean forScan, String ssid, String password) {
+        wifiScanPending = forScan;
+        pendingWifiConnectSsid = forScan ? null : ssid;
+        pendingWifiConnectPassword = forScan ? null : password;
+        runOnUiThread(() -> {
+            if (Build.VERSION.SDK_INT >= 33) {
+                requestPermissions(new String[]{Manifest.permission.NEARBY_WIFI_DEVICES, Manifest.permission.ACCESS_FINE_LOCATION}, WIFI_PERMISSION_REQUEST);
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, WIFI_PERMISSION_REQUEST);
+            }
+        });
+    }
+
+    private void requestWifiScan() {
+        if (!hasWifiScanPermissions()) { requestWifiPermissions(true, null, null); return; }
+        performWifiScan();
+    }
+
+    private void performWifiScan() {
+        runOnUiThread(() -> {
+            if (wifiManager == null) { deliverWifiScanError("Wi-Fi service is unavailable on this phone."); return; }
+            try {
+                if (!wifiManager.isWifiEnabled()) { deliverWifiScanError("Turn Wi-Fi on, then scan again."); return; }
+                try { wifiManager.startScan(); } catch (Exception ignored) { }
+                new Handler(Looper.getMainLooper()).postDelayed(this::deliverWifiScanResults, 1500);
+            } catch (SecurityException e) {
+                deliverWifiScanError("Android blocked Wi-Fi scanning. Allow Nearby Wi-Fi and Location permission, then scan again.");
+            }
+        });
+    }
+
+    private void deliverWifiScanResults() {
+        JSONArray arr = new JSONArray();
+        try {
+            List<ScanResult> results = wifiManager == null ? Collections.emptyList() : wifiManager.getScanResults();
+            Map<String, ScanResult> best = new LinkedHashMap<>();
+            for (ScanResult r : results) {
+                String ssid = r.SSID == null ? "" : r.SSID.trim();
+                if (ssid.isEmpty()) continue;
+                ScanResult old = best.get(ssid);
+                if (old == null || r.level > old.level) best.put(ssid, r);
+            }
+            List<ScanResult> sorted = new ArrayList<>(best.values());
+            sorted.sort((a,b) -> {
+                boolean af = isFluidNcSsid(a.SSID), bf = isFluidNcSsid(b.SSID);
+                if (af != bf) return af ? -1 : 1;
+                return Integer.compare(b.level, a.level);
+            });
+            for (ScanResult r : sorted) {
+                JSONObject o = new JSONObject();
+                String ssid = r.SSID == null ? "" : r.SSID.trim();
+                o.put("ssid", ssid); o.put("rssi", r.level); o.put("fluidnc", isFluidNcSsid(ssid));
+                String caps = r.capabilities == null ? "" : r.capabilities;
+                o.put("secure", caps.contains("WPA") || caps.contains("WEP") || caps.contains("SAE"));
+                o.put("security", caps); arr.put(o);
+            }
+            JSONObject payload = new JSONObject();
+            payload.put("ok", true); payload.put("networks", arr); payload.put("state", new JSONObject(getDirectWifiStateJson()));
+            deliverJs("window.__orynNativeWifiScan&&window.__orynNativeWifiScan(" + payload.toString() + ");");
+        } catch (Exception e) { deliverWifiScanError(e.getMessage() == null ? e.toString() : e.getMessage()); }
+    }
+
+    private boolean isFluidNcSsid(String ssid) {
+        String s = ssid == null ? "" : ssid.toLowerCase(java.util.Locale.US);
+        return s.equals("fluidnc") || s.startsWith("fluidnc-") || s.contains("oryn");
+    }
+
+    private void deliverWifiScanError(String message) {
+        try {
+            JSONObject p = new JSONObject(); p.put("ok", false); p.put("error", message == null ? "Wi-Fi scan failed" : message); p.put("networks", new JSONArray());
+            deliverJs("window.__orynNativeWifiScan&&window.__orynNativeWifiScan(" + p.toString() + ");");
+        } catch (Exception ignored) { }
+    }
+
+    private void requestDirectWifiConnection(String rawSsid, String rawPassword) {
+        final String ssid = rawSsid == null ? "" : rawSsid.trim();
+        final String password = rawPassword == null ? "" : rawPassword;
+        if (ssid.isEmpty()) { deliverDirectWifiState("error", ssid, "Select a Wi-Fi network first."); return; }
+        if (!hasWifiScanPermissions()) { requestWifiPermissions(false, ssid, password); return; }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            deliverDirectWifiState("unsupported", ssid, "Android 10 or newer is required for ORYN local-only Wi-Fi. Use Home Wi-Fi mode on this phone.");
+            return;
+        }
+        runOnUiThread(() -> {
+            try {
+                releaseDirectWifiNetwork();
+                WifiNetworkSpecifier.Builder specBuilder = new WifiNetworkSpecifier.Builder().setSsid(ssid);
+                if (!password.isEmpty()) specBuilder.setWpa2Passphrase(password);
+                WifiNetworkSpecifier specifier = specBuilder.build();
+                NetworkRequest request = new NetworkRequest.Builder()
+                        .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                        .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        .setNetworkSpecifier(specifier).build();
+                directWifiSsid = ssid;
+                directWifiCallback = new ConnectivityManager.NetworkCallback() {
+                    @Override public void onAvailable(Network network) {
+                        directWifiNetwork = network;
+                        deliverDirectWifiState("connected", ssid, "FluidNC local network is ready. ORYN ESP32 sockets are bound to it; Internet stays on Android's default network when available.");
+                    }
+                    @Override public void onLost(Network network) {
+                        if (network.equals(directWifiNetwork)) directWifiNetwork = null;
+                        deliverDirectWifiState("lost", ssid, "FluidNC Wi-Fi connection was lost.");
+                    }
+                    @Override public void onUnavailable() {
+                        directWifiNetwork = null;
+                        deliverDirectWifiState("unavailable", ssid, "Android could not connect to this Wi-Fi. Check the password and approve the Android connection dialog.");
+                    }
+                };
+                connectivityManager.requestNetwork(request, directWifiCallback, 30000);
+                deliverDirectWifiState("requesting", ssid, "Approve the Android Wi-Fi connection dialog if it appears.");
+            } catch (Exception e) { deliverDirectWifiState("error", ssid, e.getMessage() == null ? e.toString() : e.getMessage()); }
+        });
+    }
+
+    private void releaseDirectWifiNetwork() {
+        ConnectivityManager.NetworkCallback cb = directWifiCallback;
+        directWifiCallback = null; directWifiNetwork = null; directWifiSsid = null;
+        if (cb != null && connectivityManager != null) {
+            try { connectivityManager.unregisterNetworkCallback(cb); } catch (Exception ignored) { }
+        }
+    }
+
+    private boolean hasValidatedInternet() {
+        try {
+            Network n = connectivityManager == null ? null : connectivityManager.getActiveNetwork();
+            NetworkCapabilities c = n == null ? null : connectivityManager.getNetworkCapabilities(n);
+            return c != null && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+        } catch (Exception e) { return false; }
+    }
+
+    private boolean staConcurrencySupported() {
+        if (wifiManager == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false;
+        try { return wifiManager.isStaConcurrencyForLocalOnlyConnectionsSupported(); } catch (Exception e) { return false; }
+    }
+
+    private String getDirectWifiStateJson() {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("connected", directWifiNetwork != null); o.put("ssid", directWifiSsid);
+            o.put("internet_available", hasValidatedInternet()); o.put("sta_concurrency_supported", staConcurrencySupported());
+            o.put("android_api", Build.VERSION.SDK_INT); o.put("host", "192.168.0.1");
+        } catch (Exception ignored) { }
+        return o.toString();
+    }
+
+    private void deliverDirectWifiState(String status, String ssid, String message) {
+        try {
+            JSONObject o = new JSONObject(getDirectWifiStateJson()); o.put("status", status); o.put("ssid", ssid); o.put("message", message);
+            deliverJs("window.__orynNativeWifiConnection&&window.__orynNativeWifiConnection(" + o.toString() + ");");
+        } catch (Exception ignored) { }
+    }
+
+    private void deliverJs(String js) { runOnUiThread(() -> { if (webView != null) webView.evaluateJavascript(js, null); }); }
+
+    private Socket createDirectSocket() throws Exception {
+        Network n = directWifiNetwork;
+        return n != null ? n.getSocketFactory().createSocket() : new Socket();
+    }
+
+    private String configureFluidNcForHomeWifi(String rawSsid, String rawPassword) {
+        JSONObject out = new JSONObject();
+        try {
+            String ssid = cleanFluidSetting(rawSsid); String password = cleanFluidSetting(rawPassword);
+            if (ssid.isEmpty()) throw new IllegalArgumentException("Home Wi-Fi name is required");
+            String host = "192.168.0.1";
+            String[] commands = new String[]{"$Sta/SSID=" + ssid, "$Sta/Password=" + password, "$Sta/IPMode=DHCP", "$WiFi/Mode=STA>AP"};
+            JSONArray responses = new JSONArray();
+            for (String c : commands) {
+                String r = telnetCommand(host, c, 2500); responses.put(r);
+                if (r.toLowerCase(java.util.Locale.US).contains("error:")) throw new java.io.IOException(r.trim());
+            }
+            out.put("success", true); out.put("responses", responses);
+            out.put("message", "Home Wi-Fi settings saved to FluidNC. Power-cycle the ESP32; it will join your router and keep its FluidNC AP as fallback.");
+        } catch (Exception e) {
+            try { out.put("success", false); out.put("detail", e.getMessage() == null ? e.toString() : e.getMessage()); } catch (Exception ignored) { }
+        }
+        return out.toString();
+    }
+
+    private String cleanFluidSetting(String raw) {
+        return raw == null ? "" : raw.replace("\r", "").replace("\n", "").trim();
+    }
+
+    private void discoverFluidNcOnLanAsync() {
+        discoveryLauncher.submit(() -> {
+            JSONObject found = null;
+            try {
+                String r = telnetCommandDefault("fluidnc.local", "$I", 1000);
+                if (r.contains("FluidNC")) { found = new JSONObject(); found.put("host", "fluidnc.local"); found.put("response", r); }
+            } catch (Exception ignored) { }
+            if (found == null) {
+                String prefix = activeWifi24Prefix();
+                if (prefix != null) {
+                    ExecutorService pool = Executors.newFixedThreadPool(36);
+                    java.util.concurrent.atomic.AtomicReference<JSONObject> hit = new java.util.concurrent.atomic.AtomicReference<>();
+                    List<Future<?>> jobs = new ArrayList<>();
+                    for (int i=1; i<=254; i++) {
+                        final String host = prefix + i;
+                        jobs.add(pool.submit(() -> {
+                            if (hit.get() != null) return;
+                            try {
+                                String r = telnetCommandDefault(host, "$I", 450);
+                                if (r.contains("FluidNC")) { JSONObject h = new JSONObject(); h.put("host", host); h.put("response", r); hit.compareAndSet(null, h); }
+                            } catch (Exception ignored) { }
+                        }));
+                    }
+                    for (Future<?> f : jobs) { if (hit.get() != null) break; try { f.get(); } catch (Exception ignored) { } }
+                    pool.shutdownNow(); found = hit.get();
+                }
+            }
+            try {
+                JSONObject payload = new JSONObject(); payload.put("ok", found != null); if (found != null) payload.put("device", found); else payload.put("error", "No FluidNC controller found on the current Internet Wi-Fi.");
+                deliverJs("window.__orynNativeFluidDiscovery&&window.__orynNativeFluidDiscovery(" + payload.toString() + ");");
+            } catch (Exception ignored) { }
+        });
+    }
+
+    private String activeWifi24Prefix() {
+        try {
+            Network n = connectivityManager == null ? null : connectivityManager.getActiveNetwork();
+            if (n == null) return null;
+            NetworkCapabilities caps = connectivityManager.getNetworkCapabilities(n);
+            if (caps == null || !caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return null;
+            LinkProperties lp = connectivityManager.getLinkProperties(n); if (lp == null) return null;
+            for (LinkAddress la : lp.getLinkAddresses()) {
+                InetAddress a = la.getAddress(); if (!(a instanceof Inet4Address)) continue;
+                String ip = a.getHostAddress(); int cut = ip == null ? -1 : ip.lastIndexOf('.');
+                if (cut > 0) return ip.substring(0, cut + 1);
+            }
+        } catch (Exception ignored) { }
+        return null;
+    }
+
+    private String telnetCommandDefault(String host, String command, int timeoutMs) throws Exception {
+        String h = normalizeDirectHost(host);
+        try (Socket sock = new Socket()) {
+            sock.connect(new InetSocketAddress(h, 23), timeoutMs); sock.setSoTimeout(timeoutMs);
+            OutputStream out = sock.getOutputStream(); InputStream in = sock.getInputStream();
+            try { Thread.sleep(50); while (in.available() > 0) in.read(); } catch (Exception ignored) { }
+            out.write((command + "\\n").getBytes(StandardCharsets.UTF_8)); out.flush();
+            StringBuilder sb = new StringBuilder(); long end = System.currentTimeMillis() + timeoutMs; byte[] buf = new byte[1024];
+            while (System.currentTimeMillis() < end) {
+                try { int n = in.read(buf); if (n < 0) break; sb.append(new String(buf,0,n,StandardCharsets.UTF_8)); String z=sb.toString().toLowerCase(); if(z.contains("\\nok")||z.endsWith("ok\\r\\n")||z.contains("error:"))break; }
+                catch (java.net.SocketTimeoutException e) { break; }
+            }
+            return sb.toString();
         }
     }
 
@@ -280,9 +659,8 @@ public class MainActivity extends Activity {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType(pendingSaveMime);
         intent.putExtra(Intent.EXTRA_TITLE, pendingSaveName);
-        try {
-            startActivityForResult(intent, SAVE_FILE_REQUEST);
-        } catch (Exception e) {
+        try { startActivityForResult(intent, SAVE_FILE_REQUEST); }
+        catch (Exception e) {
             clearPendingSave();
             if (webView != null) webView.evaluateJavascript(
                     "window.__orynPatternDesignerFileSaved&&window.__orynPatternDesignerFileSaved(false,'','Unable to open Android file saver');", null);
@@ -291,6 +669,204 @@ public class MainActivity extends Activity {
 
     private void clearPendingSave() {
         pendingSaveName = null; pendingSaveMime = null; pendingSavePayload = null; pendingSaveBase64 = false;
+    }
+
+    private File directPatternDir() {
+        File d = new File(getFilesDir(), "oryn_direct_patterns");
+        if (!d.exists()) d.mkdirs();
+        return d;
+    }
+
+    private String safeDirectPatternName(String raw) {
+        String n = raw == null ? "pattern" : raw.trim();
+        if (n.toLowerCase(java.util.Locale.US).endsWith(".thr")) n = n.substring(0, n.length() - 4);
+        n = n.replaceAll("[^A-Za-z0-9 _.-]+", "_").replaceAll("\\s+", " ").trim();
+        if (n.isEmpty()) n = "pattern";
+        if (n.length() > 100) n = n.substring(0, 100).trim();
+        return n + ".thr";
+    }
+
+    private JSONObject inspectThr(String thr) throws Exception {
+        int count = 0; double firstT = 0, firstR = 0, lastT = 0, lastR = 0; boolean have = false;
+        try (BufferedReader br = new BufferedReader(new StringReader(thr == null ? "" : thr))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                String q = line.trim(); if (q.isEmpty() || q.startsWith("#")) continue;
+                String[] v = q.split("[\\s,]+"); if (v.length < 2) continue;
+                double t = Double.parseDouble(v[0]), r = Double.parseDouble(v[1]);
+                if (!Double.isFinite(t) || !Double.isFinite(r)) throw new IllegalArgumentException("THR contains non-finite coordinates");
+                if (r < -0.0001 || r > 1.0001) throw new IllegalArgumentException("THR rho must stay between 0 and 1");
+                if (!have) { firstT = t; firstR = r; have = true; }
+                lastT = t; lastR = r; count++;
+            }
+        }
+        if (count < 2) throw new IllegalArgumentException("THR must contain at least two coordinates");
+        JSONObject meta = new JSONObject();
+        meta.put("coordinates_count", count);
+        JSONObject first = new JSONObject(); first.put("x", firstT); first.put("y", firstR); meta.put("first_coordinate", first);
+        JSONObject last = new JSONObject(); last.put("x", lastT); last.put("y", lastR); meta.put("last_coordinate", last);
+        return meta;
+    }
+
+    private String saveDirectPattern(String name, String thr) {
+        JSONObject out = new JSONObject();
+        try {
+            JSONObject meta = inspectThr(thr);
+            String fileName = safeDirectPatternName(name);
+            File f = new File(directPatternDir(), fileName);
+            try (FileOutputStream fos = new FileOutputStream(f, false)) { fos.write(thr.getBytes(StandardCharsets.UTF_8)); fos.flush(); }
+            out.put("success", true); out.put("name", fileName.substring(0, fileName.length() - 4));
+            out.put("path", "custom/" + fileName); out.put("native_path", "user/" + fileName);
+            out.put("date_modified", f.lastModified() / 1000.0); out.put("category", "custom");
+            out.put("coordinates_count", meta.getInt("coordinates_count"));
+            out.put("first_coordinate", meta.getJSONObject("first_coordinate")); out.put("last_coordinate", meta.getJSONObject("last_coordinate"));
+        } catch (Exception e) {
+            try { out.put("success", false); out.put("detail", e.getMessage() == null ? e.toString() : e.getMessage()); } catch (Exception ignored) {}
+        }
+        return out.toString();
+    }
+
+    private String listDirectPatterns() {
+        JSONArray arr = new JSONArray();
+        File[] files = directPatternDir().listFiles((dir, name) -> name.toLowerCase(java.util.Locale.US).endsWith(".thr"));
+        if (files == null) return arr.toString();
+        java.util.Arrays.sort(files, (a,b) -> a.getName().compareToIgnoreCase(b.getName()));
+        for (File f : files) {
+            try {
+                String thr = readFileUtf8(f); JSONObject meta = inspectThr(thr); JSONObject o = new JSONObject();
+                String fileName=f.getName(); o.put("path", "custom/"+fileName); o.put("native_path", "user/"+fileName);
+                o.put("name", fileName.substring(0,fileName.length()-4)); o.put("category", "custom");
+                o.put("date_modified", f.lastModified()/1000.0); o.put("coordinates_count", meta.getInt("coordinates_count"));
+                o.put("first_coordinate", meta.getJSONObject("first_coordinate")); o.put("last_coordinate", meta.getJSONObject("last_coordinate")); arr.put(o);
+            } catch (Exception ignored) {}
+        }
+        return arr.toString();
+    }
+
+    private File directPatternFileFromPath(String path) {
+        String raw = path == null ? "" : path.trim();
+        int slash = raw.lastIndexOf('/'); if (slash >= 0) raw = raw.substring(slash + 1);
+        String safe = safeDirectPatternName(raw);
+        return new File(directPatternDir(), safe);
+    }
+
+    private String readDirectPattern(String path) {
+        try { File f=directPatternFileFromPath(path); return f.isFile()?readFileUtf8(f):""; } catch (Exception e) { return ""; }
+    }
+
+    private boolean deleteDirectPattern(String path) {
+        try { File f=directPatternFileFromPath(path); return f.isFile() && f.delete(); } catch (Exception e) { return false; }
+    }
+
+    private String readFileUtf8(File f) throws Exception {
+        StringBuilder sb=new StringBuilder();
+        try (BufferedReader br=new BufferedReader(new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
+            String line; while((line=br.readLine())!=null) sb.append(line).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private String normalizeDirectHost(String host) {
+        String h = host == null ? "" : host.trim();
+        h = h.replaceFirst("(?i)^https?://", "");
+        int slash = h.indexOf('/'); if (slash >= 0) h = h.substring(0, slash);
+        int colon = h.indexOf(':'); if (colon > 0) h = h.substring(0, colon);
+        return h.isEmpty() ? "192.168.0.1" : h;
+    }
+
+    private String telnetCommand(String host, String command, int timeoutMs) throws Exception {
+        String h = normalizeDirectHost(host);
+        try (Socket sock = createDirectSocket()) {
+            sock.connect(new InetSocketAddress(h, 23), timeoutMs);
+            sock.setSoTimeout(timeoutMs);
+            OutputStream out = sock.getOutputStream();
+            InputStream in = sock.getInputStream();
+            try { Thread.sleep(80); while (in.available() > 0) in.read(); } catch (Exception ignored) {}
+            out.write((command + "\n").getBytes(StandardCharsets.UTF_8)); out.flush();
+            StringBuilder sb = new StringBuilder(); long end = System.currentTimeMillis() + timeoutMs;
+            byte[] buf = new byte[1024];
+            while (System.currentTimeMillis() < end) {
+                try {
+                    int n = in.read(buf); if (n < 0) break;
+                    sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+                    String z = sb.toString().toLowerCase();
+                    if (z.contains("\nok") || z.endsWith("ok\r\n") || z.contains("error:")) break;
+                } catch (java.net.SocketTimeoutException e) { break; }
+            }
+            return sb.toString();
+        }
+    }
+
+    private void runDirectPattern(String host, String assetPathsJson, double thetaRevUnits, double rhoTravelUnits, double rhoDirection, double feed) {
+        try {
+            JSONArray paths = new JSONArray(assetPathsJson);
+            String h = normalizeDirectHost(host);
+            Socket sock = createDirectSocket(); directPatternSocket = sock;
+            sock.connect(new InetSocketAddress(h, 23), 2500); sock.setSoTimeout(5000);
+            OutputStream out = sock.getOutputStream(); InputStream in = sock.getInputStream();
+            try { Thread.sleep(100); while (in.available() > 0) in.read(); } catch (Exception ignored) {}
+            sendAndWaitOk(out, in, "$X");
+            sendAndWaitOk(out, in, "G90");
+            sendAndWaitOk(out, in, "G21");
+            for (int pi=0; pi<paths.length() && !directStopRequested.get(); pi++) {
+                String rel = paths.optString(pi, "");
+                if (rel.startsWith("/")) rel = rel.substring(1);
+                directCurrentFile = rel;
+                List<double[]> pts = new ArrayList<>();
+                BufferedReader directReader;
+                if (rel.startsWith("user/")) {
+                    File f = directPatternFileFromPath(rel);
+                    if (!f.isFile()) throw new java.io.FileNotFoundException("ORYN Direct pattern not found: " + rel);
+                    directReader = new BufferedReader(new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8));
+                } else {
+                    directReader = new BufferedReader(new InputStreamReader(getAssets().open("www/" + rel), StandardCharsets.UTF_8));
+                }
+                try (BufferedReader br = directReader) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        String q = line.trim(); if (q.isEmpty() || q.startsWith("#")) continue;
+                        String[] v = q.split("[\s,]+"); if (v.length < 2) continue;
+                        try { pts.add(new double[]{Double.parseDouble(v[0]), Double.parseDouble(v[1])}); } catch (Exception ignored) {}
+                    }
+                }
+                directTotal = pts.size(); directPoint = 0;
+                for (double[] pt : pts) {
+                    if (directStopRequested.get()) break;
+                    while (directPaused.get() && !directStopRequested.get()) Thread.sleep(80);
+                    directTheta = pt[0]; directRho = pt[1];
+                    double x = (pt[0] / (Math.PI * 2.0)) * thetaRevUnits;
+                    double y = pt[1] * rhoTravelUnits * rhoDirection;
+                    String g = String.format(java.util.Locale.US, "G1 X%.5f Y%.5f F%.3f", x, y, feed);
+                    sendAndWaitOk(out, in, g); directPoint++;
+                }
+            }
+        } catch (Exception e) { directLastError = e.getMessage() == null ? e.toString() : e.getMessage(); }
+        finally {
+            Socket s = directPatternSocket; directPatternSocket = null;
+            try { if (s != null) s.close(); } catch (Exception ignored) {}
+            directRunning.set(false); directPaused.set(false); directStopRequested.set(false); directCurrentFile = null;
+        }
+    }
+
+    private void sendAndWaitOk(OutputStream out, InputStream in, String line) throws Exception {
+        out.write((line + "\n").getBytes(StandardCharsets.UTF_8)); out.flush();
+        StringBuilder sb = new StringBuilder(); byte[] b = new byte[512];
+        while (true) {
+            int n = in.read(b); if (n < 0) throw new java.io.IOException("FluidNC connection closed");
+            sb.append(new String(b, 0, n, StandardCharsets.UTF_8));
+            String z = sb.toString().toLowerCase();
+            if (z.contains("error:")) throw new java.io.IOException(sb.toString().trim());
+            if (z.contains("\nok") || z.endsWith("ok\r\n") || z.equals("ok\n")) return;
+        }
+    }
+
+    private void directRealtime(byte b) {
+        try { Socket s = directPatternSocket; if (s != null && s.isConnected() && !s.isClosed()) { s.getOutputStream().write(b); s.getOutputStream().flush(); } } catch (Exception ignored) {}
+    }
+
+    private void directStop() {
+        directStopRequested.set(true); directPaused.set(false);
+        try { Socket s = directPatternSocket; if (s != null && s.isConnected() && !s.isClosed()) { s.getOutputStream().write(0x18); s.getOutputStream().flush(); s.close(); } } catch (Exception ignored) {}
     }
 
     private void startDiscoveryAsync() {

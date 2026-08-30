@@ -1,0 +1,27 @@
+ORYN ESP32 28BYJ CONTROLLER V1.1 — Y80 REVISION
+
+Base:
+ORYN ESP32 28BYJ Controller V1
+
+Approved correction:
+- RHO / Y FluidNC max_travel_mm changed from 32 to 80.
+
+UNCHANGED:
+- X / THETA max_travel_mm = 4000
+- X steps_per_mm = 256
+- Y steps_per_mm = 210
+- X/Y max_rate = 200
+- X/Y acceleration = 10
+- ESP32 GPIO assignments
+- ULN2003 unipolar motor configuration
+- FluidNC v3.8.3 requirement
+- One USB 5V/VIN power arrangement
+- X = THETA, Y = RHO
+- ORYN performs Theta/Rho conversion
+- ORYN calibration remains the authority for the real usable perimeter.
+
+Meaning:
+80 is only the controller-side RHO travel ceiling.
+It is NOT the physical radius and ORYN should not automatically use all 80 units.
+After building the larger table, run ORYN perimeter/radial calibration to establish
+the real usable RHO travel for that mechanism.

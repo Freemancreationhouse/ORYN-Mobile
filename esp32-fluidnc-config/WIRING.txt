@@ -1,0 +1,44 @@
+ORYN ESP32 28BYJ-48 / ULN2003 WIRING
+
+                    USB 5V POWER
+                         |
+                         v
+                  +---------------+
+                  | ESP32-WROOM-32|
+                  +---------------+
+                    |           |
+             5V/VIN |           | GND
+                    |           |
+          +---------+---+   +---+---------+
+          |             |   |             |
+          v             v   v             v
+     ULN2003 X       ULN2003 Y       COMMON GND
+      THETA            RHO
+
+THETA / X:
+ GPIO13 -> IN1
+ GPIO12 -> IN2
+ GPIO14 -> IN3
+ GPIO27 -> IN4
+
+RHO / Y:
+ GPIO19 -> IN1
+ GPIO18 -> IN2
+ GPIO5  -> IN3
+ GPIO21 -> IN4
+
+POWER:
+ ESP32 5V/VIN -> both ULN2003 VCC/+
+ ESP32 GND    -> both ULN2003 GND/-
+
+MOTORS:
+ 5-wire THETA motor -> X ULN2003 5-pin socket
+ 5-wire RHO motor   -> Y ULN2003 5-pin socket
+
+AXIS MAPPING:
+ X = THETA / rotation
+ Y = RHO / radial
+
+IMPORTANT:
+ Motors are powered from the ESP32 board's USB 5V/VIN rail, NOT the 3V3 rail.
+ Use a good USB 5V supply and cable.
