@@ -825,7 +825,7 @@ public class MainActivity extends Activity {
                     String line;
                     while ((line = br.readLine()) != null) {
                         String q = line.trim(); if (q.isEmpty() || q.startsWith("#")) continue;
-                        String[] v = q.split("[\s,]+"); if (v.length < 2) continue;
+                        String[] v = q.split("[\\s,]+"); if (v.length < 2) continue;
                         try { pts.add(new double[]{Double.parseDouble(v[0]), Double.parseDouble(v[1])}); } catch (Exception ignored) {}
                     }
                 }
