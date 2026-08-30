@@ -7,6 +7,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
 import android.provider.Settings;
+import android.util.Base64;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -23,6 +24,7 @@ import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -45,8 +47,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class MainActivity extends Activity {
     private static final String APP_HOST = "app.oryn";
     private static final int FILE_CHOOSER_REQUEST = 7001;
+    private static final int SAVE_FILE_REQUEST = 7002;
     private WebView webView;
     private ValueCallback<Uri[]> fileChooserCallback;
+    private String pendingSaveName;
+    private String pendingSaveMime;
+    private String pendingSavePayload;
+    private boolean pendingSaveBase64;
     private final ExecutorService discoveryLauncher = Executors.newSingleThreadExecutor();
     private final AtomicBoolean discoveryRunning = new AtomicBoolean(false);
     private final AtomicBoolean freshLaunchPending = new AtomicBoolean(true);
@@ -137,6 +144,34 @@ public class MainActivity extends Activity {
             }
             return;
         }
+        if (requestCode == SAVE_FILE_REQUEST) {
+            if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
+                final Uri uri = data.getData();
+                final String name = pendingSaveName;
+                final String payload = pendingSavePayload;
+                final boolean encoded = pendingSaveBase64;
+                discoveryLauncher.submit(() -> {
+                    boolean ok = false;
+                    String message;
+                    try (OutputStream out = getContentResolver().openOutputStream(uri, "w")) {
+                        if (out == null) throw new IllegalStateException("Could not open selected file");
+                        byte[] bytes = encoded ? Base64.decode(payload == null ? "" : payload, Base64.DEFAULT)
+                                : (payload == null ? new byte[0] : payload.getBytes(StandardCharsets.UTF_8));
+                        out.write(bytes); out.flush(); ok = true;
+                        message = "Saved file: " + (name == null ? "ORYN export" : name);
+                    } catch (Exception e) {
+                        message = "File save failed: " + e.getMessage();
+                    }
+                    final boolean result = ok; final String msg = message;
+                    runOnUiThread(() -> {
+                        if (webView != null) webView.evaluateJavascript(
+                                "window.__orynPatternDesignerFileSaved&&window.__orynPatternDesignerFileSaved(" + result + "," + JSONObject.quote(name == null ? "" : name) + "," + JSONObject.quote(msg) + ");", null);
+                    });
+                });
+            }
+            clearPendingSave();
+            return;
+        }
         super.onActivityResult(requestCode, resultCode, data);
     }
 
@@ -190,7 +225,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-mobile3"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-mobile4-pd"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
@@ -199,6 +234,31 @@ public class MainActivity extends Activity {
             });
         }
         @JavascriptInterface public void startDiscovery() { startDiscoveryAsync(); }
+        @JavascriptInterface public void saveFile(String filename, String mimeType, String payload, boolean base64) {
+            runOnUiThread(() -> beginSaveFile(filename, mimeType, payload, base64));
+        }
+    }
+
+    private void beginSaveFile(String filename, String mimeType, String payload, boolean base64) {
+        pendingSaveName = (filename == null || filename.trim().isEmpty()) ? "oryn-export.txt" : filename.trim();
+        pendingSaveMime = (mimeType == null || mimeType.trim().isEmpty()) ? "application/octet-stream" : mimeType.trim();
+        pendingSavePayload = payload == null ? "" : payload;
+        pendingSaveBase64 = base64;
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(pendingSaveMime);
+        intent.putExtra(Intent.EXTRA_TITLE, pendingSaveName);
+        try {
+            startActivityForResult(intent, SAVE_FILE_REQUEST);
+        } catch (Exception e) {
+            clearPendingSave();
+            if (webView != null) webView.evaluateJavascript(
+                    "window.__orynPatternDesignerFileSaved&&window.__orynPatternDesignerFileSaved(false,'','Unable to open Android file saver');", null);
+        }
+    }
+
+    private void clearPendingSave() {
+        pendingSaveName = null; pendingSaveMime = null; pendingSavePayload = null; pendingSaveBase64 = false;
     }
 
     private void startDiscoveryAsync() {
