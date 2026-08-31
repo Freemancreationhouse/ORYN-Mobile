@@ -40,11 +40,11 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN-Direct-ESP32-V10.4.1-direct3.2-smartwifi-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN-Direct-ESP32-V10.4.1-direct3.3-corefix-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ORYN-Direct-ESP32-V10.4.1-Direct3.2-SmartWiFi-APK
-          path: ORYN-Direct-ESP32-V10.4.1-direct3.2-smartwifi-debug.apk
+          name: ORYN-Direct-ESP32-V10.4.1-Direct3.3-CoreFix-APK
+          path: ORYN-Direct-ESP32-V10.4.1-direct3.3-corefix-debug.apk
           if-no-files-found: error

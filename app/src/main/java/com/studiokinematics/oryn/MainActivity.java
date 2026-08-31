@@ -104,6 +104,8 @@ public class MainActivity extends Activity {
     private final AtomicBoolean directRunning = new AtomicBoolean(false);
     private final AtomicBoolean directPaused = new AtomicBoolean(false);
     private final AtomicBoolean directStopRequested = new AtomicBoolean(false);
+    private final AtomicBoolean directHoming = new AtomicBoolean(false);
+    private volatile boolean directControllerOnline = false;
     private volatile Socket directPatternSocket;
     private volatile String directLastError = "";
     private volatile String directCurrentFile = null;
@@ -298,7 +300,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.2-smartwifi"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.3-corefix"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
@@ -326,9 +328,12 @@ public class MainActivity extends Activity {
             JSONObject out = new JSONObject();
             try {
                 String r = telnetCommand(host, "$I", 1800);
-                out.put("ok", r.contains("FluidNC") || r.contains("Grbl"));
+                boolean ok = r.contains("FluidNC") || r.contains("Grbl");
+                directControllerOnline = ok;
+                out.put("ok", ok);
                 out.put("response", r);
             } catch (Exception e) {
+                directControllerOnline = false;
                 try { out.put("ok", false); out.put("error", e.getMessage()); } catch (Exception ignored) {}
             }
             return out.toString();
@@ -337,17 +342,28 @@ public class MainActivity extends Activity {
         @JavascriptInterface public String directAction(String host, String command) {
             JSONObject out = new JSONObject();
             try {
-                String r = telnetCommand(host, command, 2500);
-                out.put("success", !r.toLowerCase().contains("error"));
+                String r = telnetCommand(host, command, 3500);
+                boolean success = !r.trim().isEmpty() && !r.toLowerCase(java.util.Locale.US).contains("error");
+                directControllerOnline = success;
+                out.put("success", success);
                 out.put("response", r);
+                if (!success) out.put("detail", r.trim().isEmpty() ? "No response from FluidNC" : r.trim());
             } catch (Exception e) {
+                directControllerOnline = false;
                 try { out.put("success", false); out.put("detail", e.getMessage()); } catch (Exception ignored) {}
             }
             return out.toString();
         }
 
+        @JavascriptInterface public boolean directHome(String host, double rhoTravelUnits, double rhoDirection, double feed) {
+            if (directRunning.get() || !directHoming.compareAndSet(false, true)) return false;
+            directStopRequested.set(false); directPaused.set(false); directLastError = ""; directSpeed = feed;
+            directExecutor.submit(() -> runDirectHome(host, rhoTravelUnits, rhoDirection, feed));
+            return true;
+        }
+
         @JavascriptInterface public boolean directStartPattern(String host, String assetPathsJson, double thetaRevUnits, double rhoTravelUnits, double rhoDirection, double feed) {
-            if (!directRunning.compareAndSet(false, true)) return false;
+            if (directHoming.get() || !directRunning.compareAndSet(false, true)) return false;
             directStopRequested.set(false); directPaused.set(false); directLastError = ""; directSpeed = feed;
             directExecutor.submit(() -> runDirectPattern(host, assetPathsJson, thetaRevUnits, rhoTravelUnits, rhoDirection, feed));
             return true;
@@ -356,7 +372,8 @@ public class MainActivity extends Activity {
         @JavascriptInterface public String directStatus() {
             JSONObject o = new JSONObject();
             try {
-                o.put("is_running", directRunning.get()); o.put("is_paused", directPaused.get());
+                o.put("connected", directControllerOnline);
+                o.put("is_running", directRunning.get()); o.put("is_paused", directPaused.get()); o.put("is_homing", directHoming.get());
                 o.put("current_file", directCurrentFile); o.put("current", directPoint); o.put("total", directTotal);
                 o.put("percentage", directTotal > 0 ? (100.0 * directPoint / directTotal) : 0.0);
                 o.put("theta", directTheta); o.put("rho", directRho); o.put("speed", directSpeed); o.put("error", directLastError);
@@ -502,6 +519,7 @@ public class MainActivity extends Activity {
                     }
                     @Override public void onLost(Network network) {
                         if (network.equals(directWifiNetwork)) directWifiNetwork = null;
+                        directControllerOnline = false;
                         deliverDirectWifiState("lost", ssid, "FluidNC Wi-Fi connection was lost.");
                     }
                     @Override public void onUnavailable() {
@@ -516,6 +534,7 @@ public class MainActivity extends Activity {
     }
 
     private void releaseDirectWifiNetwork() {
+        directControllerOnline = false;
         ConnectivityManager.NetworkCallback cb = directWifiCallback;
         directWifiCallback = null; directWifiNetwork = null; directWifiSsid = null;
         if (cb != null && connectivityManager != null) {
@@ -782,18 +801,81 @@ public class MainActivity extends Activity {
             OutputStream out = sock.getOutputStream();
             InputStream in = sock.getInputStream();
             try { Thread.sleep(80); while (in.available() > 0) in.read(); } catch (Exception ignored) {}
-            out.write((command + "\n").getBytes(StandardCharsets.UTF_8)); out.flush();
-            StringBuilder sb = new StringBuilder(); long end = System.currentTimeMillis() + timeoutMs;
-            byte[] buf = new byte[1024];
-            while (System.currentTimeMillis() < end) {
-                try {
-                    int n = in.read(buf); if (n < 0) break;
-                    sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
-                    String z = sb.toString().toLowerCase();
-                    if (z.contains("\nok") || z.endsWith("ok\r\n") || z.contains("error:")) break;
-                } catch (java.net.SocketTimeoutException e) { break; }
+            StringBuilder all = new StringBuilder();
+            String[] lines = String.valueOf(command == null ? "" : command).split("\\r?\\n");
+            for (String raw : lines) {
+                String line = raw.trim();
+                if (line.isEmpty()) continue;
+                out.write((line + "\n").getBytes(StandardCharsets.UTF_8)); out.flush();
+                String response = readCommandResponse(in, timeoutMs);
+                if (all.length() > 0) all.append("\n");
+                all.append(response);
+                if (response.toLowerCase(java.util.Locale.US).contains("error:")) break;
             }
-            return sb.toString();
+            return all.toString();
+        }
+    }
+
+    private String readCommandResponse(InputStream in, int timeoutMs) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        long end = System.currentTimeMillis() + timeoutMs;
+        byte[] buf = new byte[1024];
+        while (System.currentTimeMillis() < end) {
+            try {
+                int n = in.read(buf); if (n < 0) break;
+                sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+                String z = sb.toString().toLowerCase(java.util.Locale.US);
+                if (z.contains("\nok") || z.endsWith("ok\r\n") || z.equals("ok\n") || z.contains("error:")) break;
+            } catch (java.net.SocketTimeoutException e) { break; }
+        }
+        return sb.toString();
+    }
+
+    private String readStatusFrame(InputStream in, int timeoutMs) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        long end = System.currentTimeMillis() + timeoutMs;
+        byte[] b = new byte[512];
+        while (System.currentTimeMillis() < end) {
+            try {
+                int n = in.read(b); if (n < 0) break;
+                sb.append(new String(b, 0, n, StandardCharsets.UTF_8));
+                if (sb.indexOf(">") >= 0) break;
+            } catch (java.net.SocketTimeoutException e) { break; }
+        }
+        return sb.toString();
+    }
+
+    private void runDirectHome(String host, double rhoTravelUnits, double rhoDirection, double feed) {
+        Socket sock = null;
+        try {
+            String h = normalizeDirectHost(host);
+            sock = createDirectSocket(); directPatternSocket = sock;
+            sock.connect(new InetSocketAddress(h, 23), 2500);
+            sock.setSoTimeout(1200);
+            OutputStream out = sock.getOutputStream(); InputStream in = sock.getInputStream();
+            try { Thread.sleep(100); while (in.available() > 0) in.read(); } catch (Exception ignored) {}
+            sendAndWaitOk(out, in, "$X");
+            String jog = String.format(java.util.Locale.US, "$J=G91 G21 Y%.5f F%.3f", -rhoTravelUnits * rhoDirection, feed);
+            sendAndWaitOk(out, in, jog);
+            long deadline = System.currentTimeMillis() + 120000L;
+            boolean idle = false;
+            while (!directStopRequested.get() && System.currentTimeMillis() < deadline) {
+                out.write('?'); out.flush();
+                String status = readStatusFrame(in, 1000);
+                if (status.contains("<Idle")) { idle = true; break; }
+                Thread.sleep(180);
+            }
+            if (directStopRequested.get()) return;
+            if (!idle) throw new java.io.IOException("Timed out waiting for FluidNC to finish homing");
+            sendAndWaitOk(out, in, "G92 X0 Y0");
+            directTheta = 0.0; directRho = 0.0; directControllerOnline = true;
+        } catch (Exception e) {
+            directControllerOnline = false;
+            directLastError = e.getMessage() == null ? e.toString() : e.getMessage();
+        } finally {
+            try { if (sock != null) sock.close(); } catch (Exception ignored) {}
+            if (directPatternSocket == sock) directPatternSocket = null;
+            directHoming.set(false); directStopRequested.set(false);
         }
     }
 
@@ -803,6 +885,7 @@ public class MainActivity extends Activity {
             String h = normalizeDirectHost(host);
             Socket sock = createDirectSocket(); directPatternSocket = sock;
             sock.connect(new InetSocketAddress(h, 23), 2500); sock.setSoTimeout(5000);
+            directControllerOnline = true;
             OutputStream out = sock.getOutputStream(); InputStream in = sock.getInputStream();
             try { Thread.sleep(100); while (in.available() > 0) in.read(); } catch (Exception ignored) {}
             sendAndWaitOk(out, in, "$X");
