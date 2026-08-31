@@ -9,7 +9,7 @@ android {
         minSdk 26
         targetSdk 35
         versionCode 1040195
-        versionName '10.4.1-direct3.4-homewifi'
+        versionName '10.4.1-direct3.5-persistent-lan'
     }
 
     buildTypes {

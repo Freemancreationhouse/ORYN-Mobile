@@ -300,7 +300,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.4-homewifi"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.5-persistent-lan"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
@@ -332,6 +332,10 @@ public class MainActivity extends Activity {
                 directControllerOnline = ok;
                 out.put("ok", ok);
                 out.put("response", r);
+                try {
+                    String resolved = InetAddress.getByName(normalizeDirectHost(host)).getHostAddress();
+                    if (resolved != null && !resolved.trim().isEmpty()) out.put("host", resolved);
+                } catch (Exception ignored) { out.put("host", normalizeDirectHost(host)); }
             } catch (Exception e) {
                 directControllerOnline = false;
                 try { out.put("ok", false); out.put("error", e.getMessage()); } catch (Exception ignored) {}
@@ -344,7 +348,8 @@ public class MainActivity extends Activity {
             try {
                 String r = telnetCommand(host, command, 3500);
                 boolean success = !r.trim().isEmpty() && !r.toLowerCase(java.util.Locale.US).contains("error");
-                directControllerOnline = success;
+                // If FluidNC answered, transport is online even when the G-code itself was rejected.
+                directControllerOnline = true;
                 out.put("success", success);
                 out.put("response", r);
                 if (!success) out.put("detail", r.trim().isEmpty() ? "No response from FluidNC" : r.trim());
@@ -627,7 +632,15 @@ public class MainActivity extends Activity {
             JSONObject found = null;
             try {
                 String r = telnetCommandDefault("fluidnc.local", "$I", 1000);
-                if (r.contains("FluidNC")) { found = new JSONObject(); found.put("host", "fluidnc.local"); found.put("response", r); }
+                if (r.contains("FluidNC")) {
+                    found = new JSONObject();
+                    String resolved = "fluidnc.local";
+                    try {
+                        String ip = InetAddress.getByName("fluidnc.local").getHostAddress();
+                        if (ip != null && !ip.trim().isEmpty()) resolved = ip;
+                    } catch (Exception ignored) { }
+                    found.put("host", resolved); found.put("response", r);
+                }
             } catch (Exception ignored) { }
             if (found == null) {
                 String prefix = activeWifi24Prefix();
@@ -866,10 +879,13 @@ public class MainActivity extends Activity {
 
     private void runDirectHome(String host, double rhoTravelUnits, double rhoDirection, double feed) {
         Socket sock = null;
+        boolean transportConnected = false;
         try {
             String h = normalizeDirectHost(host);
             sock = createDirectSocketForHost(h); directPatternSocket = sock;
             sock.connect(new InetSocketAddress(h, 23), 2500);
+            transportConnected = true;
+            directControllerOnline = true;
             sock.setSoTimeout(1200);
             OutputStream out = sock.getOutputStream(); InputStream in = sock.getInputStream();
             try { Thread.sleep(100); while (in.available() > 0) in.read(); } catch (Exception ignored) {}
@@ -889,7 +905,9 @@ public class MainActivity extends Activity {
             sendAndWaitOk(out, in, "G92 X0 Y0");
             directTheta = 0.0; directRho = 0.0; directControllerOnline = true;
         } catch (Exception e) {
-            directControllerOnline = false;
+            // A rejected/timeout motion command does not mean FluidNC disappeared.
+            // Only a failure before the Telnet socket connected marks the controller offline.
+            if (!transportConnected) directControllerOnline = false;
             directLastError = e.getMessage() == null ? e.toString() : e.getMessage();
         } finally {
             try { if (sock != null) sock.close(); } catch (Exception ignored) {}

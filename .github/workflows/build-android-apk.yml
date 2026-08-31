@@ -40,11 +40,11 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN-Direct-ESP32-V10.4.1-direct3.4-homewifi-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN-Direct-ESP32-V10.4.1-direct3.5-persistent-lan-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ORYN-Direct-ESP32-V10.4.1-Direct3.4-HomeWiFi-APK
-          path: ORYN-Direct-ESP32-V10.4.1-direct3.4-homewifi-debug.apk
+          name: ORYN-Direct-ESP32-V10.4.1-Direct3.5-HomeWiFi-APK
+          path: ORYN-Direct-ESP32-V10.4.1-direct3.5-persistent-lan-debug.apk
           if-no-files-found: error
