@@ -1,0 +1,9 @@
+ORYN Direct ESP32 V10.4.1 — Direct3.1 Compile Hotfix
+=====================================================
+Fixes GitHub Actions / Java compilation failure in MainActivity.java:
+  q.split("[\s,]+")
+was corrected to the Java-8-compatible regex literal:
+  q.split("[\\s,]+")
+
+No motion math, Pattern Designer logic, FluidNC transport behavior, calibration logic,
+or Smart Wi-Fi behavior was intentionally changed by this hotfix.

@@ -1,0 +1,11 @@
+ORYN Direct ESP32 V10.4.1 — Direct3.2 Connection UX Hotfix
+
+Fixes observed on-device Direct3.1 flow:
+- FluidNC row now shows Connecting… then Connected ✓.
+- Removes browser prompt() dialogs for Theta/Rho/direction/feed.
+- After FluidNC probe succeeds, first-time calibration is shown inline in the ORYN Smart Wi-Fi panel.
+- If valid Direct calibration already exists in local storage, connection activates automatically.
+- Manual-IP and Home-Wi-Fi discovery use the same activation path.
+- No changes to Direct2 Theta/Rho conversion or direct pattern motion streaming.
+
+First-time setup still requires the table-specific saved Theta 360° and Rho center-to-perimeter controller-unit values before machine control can be activated safely.

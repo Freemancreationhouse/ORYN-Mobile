@@ -300,7 +300,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.3-corefix"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.4-homewifi"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
@@ -356,7 +356,12 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface public boolean directHome(String host, double rhoTravelUnits, double rhoDirection, double feed) {
-            if (directRunning.get() || !directHoming.compareAndSet(false, true)) return false;
+            // A second Home press while the first Home is already running is not
+            // an error.  This also avoids a false failure when the UI auto-homes
+            // and the user taps Home at the same time.
+            if (directHoming.get()) return true;
+            if (directRunning.get()) { directLastError = "A pattern is running"; return false; }
+            if (!directHoming.compareAndSet(false, true)) return directHoming.get();
             directStopRequested.set(false); directPaused.set(false); directLastError = ""; directSpeed = feed;
             directExecutor.submit(() -> runDirectHome(host, rhoTravelUnits, rhoDirection, feed));
             return true;
@@ -579,6 +584,20 @@ public class MainActivity extends Activity {
         return n != null ? n.getSocketFactory().createSocket() : new Socket();
     }
 
+    // DIRECT3.4: only bind sockets to Android's local-only FluidNC AP network
+    // when we are actually talking to the AP address.  Once FluidNC joins the
+    // user's home Wi-Fi (STA), its 192.168.x.x address must use Android's
+    // normal/default Wi-Fi route, otherwise a stale WifiNetworkSpecifier
+    // network can make motion commands fail even while the browser works.
+    private Socket createDirectSocketForHost(String host) throws Exception {
+        String h = normalizeDirectHost(host);
+        Network n = directWifiNetwork;
+        if (n != null && ("192.168.0.1".equals(h) || "fluidnc".equalsIgnoreCase(h))) {
+            return n.getSocketFactory().createSocket();
+        }
+        return new Socket();
+    }
+
     private String configureFluidNcForHomeWifi(String rawSsid, String rawPassword) {
         JSONObject out = new JSONObject();
         try {
@@ -659,10 +678,10 @@ public class MainActivity extends Activity {
             sock.connect(new InetSocketAddress(h, 23), timeoutMs); sock.setSoTimeout(timeoutMs);
             OutputStream out = sock.getOutputStream(); InputStream in = sock.getInputStream();
             try { Thread.sleep(50); while (in.available() > 0) in.read(); } catch (Exception ignored) { }
-            out.write((command + "\\n").getBytes(StandardCharsets.UTF_8)); out.flush();
+            out.write((command + "\n").getBytes(StandardCharsets.UTF_8)); out.flush();
             StringBuilder sb = new StringBuilder(); long end = System.currentTimeMillis() + timeoutMs; byte[] buf = new byte[1024];
             while (System.currentTimeMillis() < end) {
-                try { int n = in.read(buf); if (n < 0) break; sb.append(new String(buf,0,n,StandardCharsets.UTF_8)); String z=sb.toString().toLowerCase(); if(z.contains("\\nok")||z.endsWith("ok\\r\\n")||z.contains("error:"))break; }
+                try { int n = in.read(buf); if (n < 0) break; sb.append(new String(buf,0,n,StandardCharsets.UTF_8)); String z=sb.toString().toLowerCase(); if(z.contains("\nok")||z.endsWith("ok\r\n")||z.equals("ok\n")||z.contains("error:"))break; }
                 catch (java.net.SocketTimeoutException e) { break; }
             }
             return sb.toString();
@@ -795,7 +814,7 @@ public class MainActivity extends Activity {
 
     private String telnetCommand(String host, String command, int timeoutMs) throws Exception {
         String h = normalizeDirectHost(host);
-        try (Socket sock = createDirectSocket()) {
+        try (Socket sock = createDirectSocketForHost(h)) {
             sock.connect(new InetSocketAddress(h, 23), timeoutMs);
             sock.setSoTimeout(timeoutMs);
             OutputStream out = sock.getOutputStream();
@@ -849,7 +868,7 @@ public class MainActivity extends Activity {
         Socket sock = null;
         try {
             String h = normalizeDirectHost(host);
-            sock = createDirectSocket(); directPatternSocket = sock;
+            sock = createDirectSocketForHost(h); directPatternSocket = sock;
             sock.connect(new InetSocketAddress(h, 23), 2500);
             sock.setSoTimeout(1200);
             OutputStream out = sock.getOutputStream(); InputStream in = sock.getInputStream();
@@ -883,7 +902,7 @@ public class MainActivity extends Activity {
         try {
             JSONArray paths = new JSONArray(assetPathsJson);
             String h = normalizeDirectHost(host);
-            Socket sock = createDirectSocket(); directPatternSocket = sock;
+            Socket sock = createDirectSocketForHost(h); directPatternSocket = sock;
             sock.connect(new InetSocketAddress(h, 23), 2500); sock.setSoTimeout(5000);
             directControllerOnline = true;
             OutputStream out = sock.getOutputStream(); InputStream in = sock.getInputStream();

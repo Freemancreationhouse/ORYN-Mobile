@@ -1,0 +1,6 @@
+IMPORTANT — CURRENT TEST TABLE
+
+Do NOT reflash the ESP32 just to install Direct3.3.
+This folder is retained only from the earlier Direct source package for reference compatibility.
+The user's current ESP32 already passed manual X/Y motor movement tests and Y steps_per_mm was corrected manually for the small Dune Weaver Mini test.
+Direct3.3 is an Android application fix. Install/build the APK only unless a controller reflash is explicitly requested later.
