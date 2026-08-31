@@ -300,7 +300,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.8-live-calibration"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.9-active-stream"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
@@ -935,7 +935,13 @@ public class MainActivity extends Activity {
             JSONArray paths = new JSONArray(assetPathsJson);
             String h = normalizeDirectHost(host);
             Socket sock = createDirectSocketForHost(h); directPatternSocket = sock;
-            sock.connect(new InetSocketAddress(h, 23), 2500); sock.setSoTimeout(5000);
+            sock.connect(new InetSocketAddress(h, 23), 2500);
+            // FluidNC/GRBL planner buffers are intentionally small (typically around
+            // 16 blocks).  Once the planner fills, the next `ok` is delayed until a
+            // queued motion block advances.  A 5-second socket timeout therefore
+            // caused valid long patterns to stop around point 15/16.  Keep a short
+            // read heartbeat, but let sendAndWaitOk() wait across those heartbeats.
+            sock.setSoTimeout(2000);
             directControllerOnline = true;
             OutputStream out = sock.getOutputStream(); InputStream in = sock.getInputStream();
             try { Thread.sleep(100); while (in.available() > 0) in.read(); } catch (Exception ignored) {}
@@ -964,11 +970,23 @@ public class MainActivity extends Activity {
                     }
                 }
                 directTotal = pts.size(); directPoint = 0;
+                // Theta is periodic. Shift the entire pattern by an integer number
+                // of 2π turns so its first angle is the equivalent angle nearest
+                // the machine's current theta. This preserves every pattern delta
+                // and the drawn geometry, while avoiding unnecessary 50/100-turn
+                // lead-in moves present in some valid unwrapped THR files.
+                double thetaOffset = 0.0;
+                if (!pts.isEmpty()) {
+                    double firstTheta = pts.get(0)[0];
+                    double turns = Math.rint((directTheta - firstTheta) / (Math.PI * 2.0));
+                    thetaOffset = turns * Math.PI * 2.0;
+                }
                 for (double[] pt : pts) {
                     if (directStopRequested.get()) break;
                     while (directPaused.get() && !directStopRequested.get()) Thread.sleep(80);
-                    directTheta = pt[0]; directRho = pt[1];
-                    double x = (pt[0] / (Math.PI * 2.0)) * thetaRevUnits;
+                    double adjustedTheta = pt[0] + thetaOffset;
+                    directTheta = adjustedTheta; directRho = pt[1];
+                    double x = (adjustedTheta / (Math.PI * 2.0)) * thetaRevUnits;
                     double y = pt[1] * rhoTravelUnits * rhoDirection;
                     String g = String.format(java.util.Locale.US, "G1 X%.5f Y%.5f F%.3f", x, y, feed);
                     sendAndWaitOk(out, in, g); directPoint++;
@@ -987,15 +1005,37 @@ public class MainActivity extends Activity {
     }
 
     private void sendAndWaitOk(OutputStream out, InputStream in, String line) throws Exception {
+        sendAndWaitOk(out, in, line, 180000L);
+    }
+
+    private void sendAndWaitOk(OutputStream out, InputStream in, String line, long acknowledgementDeadlineMs) throws Exception {
         out.write((line + "\n").getBytes(StandardCharsets.UTF_8)); out.flush();
-        StringBuilder sb = new StringBuilder(); byte[] b = new byte[512];
-        while (true) {
-            int n = in.read(b); if (n < 0) throw new java.io.IOException("FluidNC connection closed");
-            sb.append(new String(b, 0, n, StandardCharsets.UTF_8));
-            String z = sb.toString().toLowerCase();
-            if (z.contains("error:")) throw new java.io.IOException(sb.toString().trim());
-            if (z.contains("\nok") || z.endsWith("ok\r\n") || z.equals("ok\n")) return;
+        StringBuilder sb = new StringBuilder();
+        byte[] b = new byte[512];
+        long deadline = System.currentTimeMillis() + Math.max(5000L, acknowledgementDeadlineMs);
+        while (System.currentTimeMillis() < deadline) {
+            if (directStopRequested.get()) throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
+            try {
+                int n = in.read(b);
+                if (n < 0) throw new java.io.IOException("FluidNC connection closed");
+                sb.append(new String(b, 0, n, StandardCharsets.UTF_8));
+                String z = sb.toString().toLowerCase(java.util.Locale.US);
+                if (z.contains("error:")) throw new java.io.IOException(sb.toString().trim());
+                if (containsFluidNcOk(z)) return;
+            } catch (java.net.SocketTimeoutException timeout) {
+                // This is normally planner back-pressure, not a lost controller.
+                // Keep waiting while still allowing Stop to interrupt promptly.
+            }
         }
+        throw new java.io.IOException("FluidNC acknowledgement timed out while motion planner was busy: " + line);
+    }
+
+    private boolean containsFluidNcOk(String z) {
+        if (z == null || z.isEmpty()) return false;
+        return z.equals("ok") || z.equals("ok\n") || z.equals("ok\r\n")
+                || z.startsWith("ok\n") || z.startsWith("ok\r\n")
+                || z.contains("\nok\n") || z.contains("\nok\r\n")
+                || z.endsWith("\nok") || z.endsWith("\nok\r\n");
     }
 
     private void directRealtime(byte b) {

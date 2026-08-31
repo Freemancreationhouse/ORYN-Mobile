@@ -1,0 +1,28 @@
+ORYN Direct ESP32 V10.4.1 — DIRECT3.9 Validation
+
+PASS: JavaScript syntax checked with node --check
+PASS: Direct ID declared before cold-start state code
+PASS: Direct activation marks Direct transport current
+PASS: Offline current flag follows active Offline state
+PASS: Pattern socket no longer has fixed 5-second read timeout
+PASS: Planner back-pressure SocketTimeoutException is handled
+PASS: Pattern acknowledgement has bounded 180-second deadline
+PASS: Stop can interrupt acknowledgement wait
+PASS: Theta origin is normalized by integer 2π turns only
+PASS: Live calibration endpoints retained
+PASS: 100-pattern catalog retained
+
+Observed Direct3.8 timeout reproduction:
+- Hubcap first two THR points: (0.0, 0.0) -> (-1.571, 0.008)
+- At theta/rev=50, first theta move = 12.502 controller units
+- At feed=60 controller-units/min, that move alone takes ≈ 12.50 s
+- Direct3.8 socket read timeout was 5.0 s.
+- Once FluidNC planner queue fills (failure reported at point 15), the next ok can legitimately be delayed by the active motion; Direct3.8 misclassified that back-pressure as a dead connection.
+
+Theta normalization sanity check:
+- Petalar stored first theta = 628.319000 rad
+- Nearest equivalent around current theta=0 = 0.000469 rad using integer 2π shift (-100 turns)
+- Relative theta/rho deltas and pattern geometry remain unchanged.
+
+Java parse note:
+- javac was run as a syntax smoke test; this Linux container lacks Android SDK classes, so type-resolution errors are expected. No Java syntax-pattern errors were detected in the compiler output.
