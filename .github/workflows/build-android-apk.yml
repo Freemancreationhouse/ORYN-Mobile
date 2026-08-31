@@ -40,11 +40,11 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN-V10.4.1-direct3.7-offline-start-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN-V10.4.1-direct3.8-live-calibration-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ORYN-V10.4.1-Direct3.7-Offline-Start-APK
-          path: ORYN-V10.4.1-direct3.7-offline-start-debug.apk
+          path: ORYN-V10.4.1-direct3.8-live-calibration-debug.apk
           if-no-files-found: error

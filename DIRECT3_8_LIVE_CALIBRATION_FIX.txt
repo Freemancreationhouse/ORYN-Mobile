@@ -1,0 +1,26 @@
+ORYN Direct ESP32 V10.4.1 — DIRECT3.8 LIVE CALIBRATION FIX
+
+Fixes the Direct3.7 calibration routing defect where the visible Full-Circle and Perimeter calibration cards could read saved values but POST actions (/start, /jog, /save, /set, /reset) were incorrectly handled by ORYN Offline and returned HTTP 409.
+
+Direct ESP32 calibration now supports:
+- Full-Circle start: sets current physical Theta orientation as X0 without moving.
+- Theta jog: real relative X motion using controller units.
+- Full-Circle save: measured accumulated controller travel becomes thetaRevUnits used immediately by THR conversion.
+- Full-Circle Update: manually enter a measured controller-unit value.
+- Perimeter start: current physical center becomes Y0 without moving.
+- Rho jog: real relative Y motion, honoring saved rhoDirection.
+- Perimeter save: measured Center→Perimeter controller travel becomes rhoTravelUnits used immediately by Home, Perimeter and THR conversion.
+- Perimeter Update: manually enter a measured controller-unit value.
+- Reset restores the Direct baseline captured before the first Direct3.8 calibration edit.
+- Pattern/Home/Center/Perimeter are blocked while a live calibration session is active to prevent conflicting motion.
+
+Preserved from Direct3.7:
+- ORYN Offline cold start
+- 100-pattern offline library
+- dynamic ORYN / Direct ESP32 / Pi header behavior
+- Smart Wi-Fi and travel-network setup
+- Direct3.6 stable session protections
+- Pattern Designer and Pattern Forge
+- existing Theta-Rho conversion formula and motion engine
+
+Important: Calibration controls are intentionally unavailable while ORYN Offline is the selected table. Select/connect ORYN Direct — ESP32 FluidNC first, then calibrate.

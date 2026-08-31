@@ -220,7 +220,7 @@
   async function resetRotation() {
     await execute(
       '/api/rotation-calibration/reset', undefined,
-      'Full-circle calibration cleared. Patterns will not use universal geometry until it is saved again.',
+      data => data && data.restored ? 'Full-circle calibration restored to the saved Direct baseline.' : 'Full-circle calibration cleared. Patterns will not use universal geometry until it is saved again.',
       'oryn-rc-message'
     );
   }
@@ -270,7 +270,7 @@
   async function resetPerimeter() {
     await execute(
       '/api/perimeter-calibration/reset', undefined,
-      'Original source radial scale restored.',
+      data => data && data.restored ? 'Perimeter calibration restored to the saved Direct baseline.' : 'Original source radial scale restored.',
       'oryn-pc-message'
     );
   }
