@@ -300,7 +300,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.9-active-stream"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.10-synced-playback"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
@@ -949,9 +949,20 @@ public class MainActivity extends Activity {
             sendAndWaitOk(out, in, "G90");
             sendAndWaitOk(out, in, "G21");
             for (int pi=0; pi<paths.length() && !directStopRequested.get(); pi++) {
-                String rel = paths.optString(pi, "");
+                Object item = paths.opt(pi);
+                String rel;
+                String displayName;
+                if (item instanceof JSONObject) {
+                    JSONObject spec = (JSONObject) item;
+                    rel = spec.optString("asset", "");
+                    displayName = spec.optString("display", rel);
+                } else {
+                    rel = paths.optString(pi, "");
+                    displayName = rel;
+                }
                 if (rel.startsWith("/")) rel = rel.substring(1);
-                directCurrentFile = rel;
+                if (displayName == null || displayName.trim().isEmpty()) displayName = rel;
+                directCurrentFile = displayName;
                 List<double[]> pts = new ArrayList<>();
                 BufferedReader directReader;
                 if (rel.startsWith("user/")) {
@@ -991,6 +1002,10 @@ public class MainActivity extends Activity {
                     String g = String.format(java.util.Locale.US, "G1 X%.5f Y%.5f F%.3f", x, y, feed);
                     sendAndWaitOk(out, in, g); directPoint++;
                 }
+                // FluidNC `ok` confirms that a block was accepted, not that the
+                // motors physically completed it. Keep playback active until the
+                // planner reports Idle so UI completion follows real motion.
+                if (!directStopRequested.get()) waitForDirectIdle(out, in, 240000L);
             }
         } catch (Exception e) {
             String detail = e.getMessage() == null ? e.toString() : e.getMessage();
@@ -1002,6 +1017,18 @@ public class MainActivity extends Activity {
             try { if (s != null) s.close(); } catch (Exception ignored) {}
             directRunning.set(false); directPaused.set(false); directStopRequested.set(false); directCurrentFile = null;
         }
+    }
+
+    private void waitForDirectIdle(OutputStream out, InputStream in, long timeoutMs) throws Exception {
+        long deadline = System.currentTimeMillis() + Math.max(5000L, timeoutMs);
+        while (System.currentTimeMillis() < deadline) {
+            if (directStopRequested.get()) throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
+            out.write('?'); out.flush();
+            String status = readStatusFrame(in, 1200);
+            if (status != null && status.contains("<Idle")) return;
+            Thread.sleep(100);
+        }
+        throw new java.io.IOException("Timed out waiting for FluidNC planner to become Idle");
     }
 
     private void sendAndWaitOk(OutputStream out, InputStream in, String line) throws Exception {

@@ -1,0 +1,11 @@
+DIRECT3.10 STATIC VALIDATION
+build_marker: PASS
+display_asset_clear: PASS
+display_asset_pattern: PASS
+identity_sync: PASS
+java_object_sequence: PASS
+java_idle_wait: PASS
+version_name: PASS
+artifact_name: PASS
+Java source structural checks: PASS
+Star display-name mapping target: PASS
