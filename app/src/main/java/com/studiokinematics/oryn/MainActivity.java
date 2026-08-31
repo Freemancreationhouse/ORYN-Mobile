@@ -300,7 +300,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.5-persistent-lan"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.6-stable-session"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
@@ -327,9 +327,23 @@ public class MainActivity extends Activity {
         @JavascriptInterface public String directProbe(String host) {
             JSONObject out = new JSONObject();
             try {
+                // DIRECT3.6: never open a second Telnet client while the motion
+                // session owns FluidNC. Some FluidNC builds/phones can drop the
+                // first Telnet stream when a background probe opens another one.
+                // During Home/pattern playback the live motion socket itself is
+                // the connection proof, so report it healthy without probing.
+                if (directRunning.get() || directHoming.get()) {
+                    directControllerOnline = true;
+                    out.put("ok", true);
+                    out.put("busy", true);
+                    out.put("host", normalizeDirectHost(host));
+                    out.put("response", "FluidNC Direct motion session active");
+                    return out.toString();
+                }
                 String r = telnetCommand(host, "$I", 1800);
                 boolean ok = r.contains("FluidNC") || r.contains("Grbl");
                 directControllerOnline = ok;
+                if (ok) directLastError = "";
                 out.put("ok", ok);
                 out.put("response", r);
                 try {
@@ -960,7 +974,11 @@ public class MainActivity extends Activity {
                     sendAndWaitOk(out, in, g); directPoint++;
                 }
             }
-        } catch (Exception e) { directLastError = e.getMessage() == null ? e.toString() : e.getMessage(); }
+        } catch (Exception e) {
+            String detail = e.getMessage() == null ? e.toString() : e.getMessage();
+            String file = directCurrentFile == null ? "pattern" : directCurrentFile;
+            directLastError = "Pattern " + file + " stopped at point " + directPoint + "/" + directTotal + ": " + detail;
+        }
         finally {
             Socket s = directPatternSocket; directPatternSocket = null;
             try { if (s != null) s.close(); } catch (Exception ignored) {}
