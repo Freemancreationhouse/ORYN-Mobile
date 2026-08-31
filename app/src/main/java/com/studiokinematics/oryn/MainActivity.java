@@ -84,10 +84,11 @@ public class MainActivity extends Activity {
     private String pendingSavePayload;
     private boolean pendingSaveBase64;
     private final ExecutorService discoveryLauncher = Executors.newSingleThreadExecutor();
+    private final ExecutorService directNetworkExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean discoveryRunning = new AtomicBoolean(false);
     private final AtomicBoolean freshLaunchPending = new AtomicBoolean(true);
 
-    // Direct3 Smart Wi-Fi: ORYN requests a local-only FluidNC Wi-Fi network and
+    // Smart Wi-Fi: ORYN requests a local-only FluidNC Wi-Fi network and
     // binds ONLY ESP32 sockets to it. The Android default network remains free
     // for Internet traffic (cellular or primary Wi-Fi where STA concurrency is supported).
     private WifiManager wifiManager;
@@ -253,6 +254,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         discoveryLauncher.shutdownNow();
+        directNetworkExecutor.shutdownNow();
         releaseDirectWifiNetwork();
         directStop();
         directExecutor.shutdownNow();
@@ -300,7 +302,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.10-synced-playback"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-unified-connection"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
@@ -312,8 +314,8 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void connectDirectWifi(String ssid, String password) { requestDirectWifiConnection(ssid, password); }
         @JavascriptInterface public void disconnectDirectWifi() { runOnUiThread(() -> releaseDirectWifiNetwork()); }
         @JavascriptInterface public String directWifiState() { return getDirectWifiStateJson(); }
-        @JavascriptInterface public String configureFluidNcHomeWifi(String ssid, String password) { return configureFluidNcForHomeWifi(ssid, password); }
-        @JavascriptInterface public void discoverFluidNcLan() { discoverFluidNcOnLanAsync(); }
+        @JavascriptInterface public String configureFluidNcHomeWifi(String host, String ssid, String password) { return configureFluidNcForHomeWifi(host, ssid, password); }
+        @JavascriptInterface public void discoverFluidNcLan(String preferredHost) { discoverFluidNcOnLanAsync(preferredHost); }
         @JavascriptInterface public void startDiscovery() { startDiscoveryAsync(); }
         @JavascriptInterface public void saveFile(String filename, String mimeType, String payload, boolean base64) {
             runOnUiThread(() -> beginSaveFile(filename, mimeType, payload, base64));
@@ -325,36 +327,25 @@ public class MainActivity extends Activity {
         @JavascriptInterface public boolean directDeletePattern(String path) { return deleteDirectPattern(path); }
 
         @JavascriptInterface public String directProbe(String host) {
-            JSONObject out = new JSONObject();
-            try {
-                // DIRECT3.6: never open a second Telnet client while the motion
-                // session owns FluidNC. Some FluidNC builds/phones can drop the
-                // first Telnet stream when a background probe opens another one.
-                // During Home/pattern playback the live motion socket itself is
-                // the connection proof, so report it healthy without probing.
-                if (directRunning.get() || directHoming.get()) {
-                    directControllerOnline = true;
-                    out.put("ok", true);
-                    out.put("busy", true);
-                    out.put("host", normalizeDirectHost(host));
-                    out.put("response", "FluidNC Direct motion session active");
-                    return out.toString();
-                }
-                String r = telnetCommand(host, "$I", 1800);
-                boolean ok = r.contains("FluidNC") || r.contains("Grbl");
-                directControllerOnline = ok;
-                if (ok) directLastError = "";
-                out.put("ok", ok);
-                out.put("response", r);
+            return probeDirectController(host);
+        }
+
+        @JavascriptInterface public void directProbeAsync(String host) {
+            final String requested = normalizeDirectHost(host);
+            directNetworkExecutor.submit(() -> {
                 try {
-                    String resolved = InetAddress.getByName(normalizeDirectHost(host)).getHostAddress();
-                    if (resolved != null && !resolved.trim().isEmpty()) out.put("host", resolved);
-                } catch (Exception ignored) { out.put("host", normalizeDirectHost(host)); }
-            } catch (Exception e) {
-                directControllerOnline = false;
-                try { out.put("ok", false); out.put("error", e.getMessage()); } catch (Exception ignored) {}
-            }
-            return out.toString();
+                    JSONObject payload = new JSONObject(probeDirectController(requested));
+                    payload.put("requested_host", requested);
+                    deliverJs("window.__orynNativeDirectProbe&&window.__orynNativeDirectProbe(" + payload.toString() + ");");
+                } catch (Exception e) {
+                    try {
+                        JSONObject payload = new JSONObject();
+                        payload.put("ok", false); payload.put("requested_host", requested);
+                        payload.put("error", e.getMessage() == null ? e.toString() : e.getMessage());
+                        deliverJs("window.__orynNativeDirectProbe&&window.__orynNativeDirectProbe(" + payload.toString() + ");");
+                    } catch (Exception ignored) { }
+                }
+            });
         }
 
         @JavascriptInterface public String directAction(String host, String command) {
@@ -408,6 +399,35 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void directStopNow() { directStop(); }
         @JavascriptInterface public void directPauseNow() { directRealtime((byte)'!'); directPaused.set(true); }
         @JavascriptInterface public void directResumeNow() { directRealtime((byte)'~'); directPaused.set(false); }
+    }
+
+    private String probeDirectController(String host) {
+        JSONObject out = new JSONObject();
+        try {
+            // Never open a second Telnet client while Home/pattern owns FluidNC.
+            if (directRunning.get() || directHoming.get()) {
+                directControllerOnline = true;
+                out.put("ok", true); out.put("busy", true);
+                out.put("host", normalizeDirectHost(host));
+                out.put("response", "FluidNC Direct motion session active");
+                return out.toString();
+            }
+            String h = normalizeDirectHost(host);
+            String r = telnetCommand(h, "$I", 2200);
+            boolean ok = r.contains("FluidNC") || r.contains("Grbl");
+            directControllerOnline = ok;
+            if (ok) directLastError = "";
+            out.put("ok", ok); out.put("response", r);
+            try {
+                String resolved = InetAddress.getByName(h).getHostAddress();
+                out.put("host", (resolved == null || resolved.trim().isEmpty()) ? h : resolved);
+            } catch (Exception ignored) { out.put("host", h); }
+            if (!ok) out.put("error", "FluidNC/GRBL banner not received");
+        } catch (Exception e) {
+            directControllerOnline = false;
+            try { out.put("ok", false); out.put("host", normalizeDirectHost(host)); out.put("error", e.getMessage() == null ? e.toString() : e.getMessage()); } catch (Exception ignored) { }
+        }
+        return out.toString();
     }
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
@@ -603,7 +623,7 @@ public class MainActivity extends Activity {
         return n != null ? n.getSocketFactory().createSocket() : new Socket();
     }
 
-    // DIRECT3.4: only bind sockets to Android's local-only FluidNC AP network
+    // Only bind sockets to Android's local-only FluidNC AP network
     // when we are actually talking to the AP address.  Once FluidNC joins the
     // user's home Wi-Fi (STA), its 192.168.x.x address must use Android's
     // normal/default Wi-Fi route, otherwise a stale WifiNetworkSpecifier
@@ -617,12 +637,12 @@ public class MainActivity extends Activity {
         return new Socket();
     }
 
-    private String configureFluidNcForHomeWifi(String rawSsid, String rawPassword) {
+    private String configureFluidNcForHomeWifi(String rawHost, String rawSsid, String rawPassword) {
         JSONObject out = new JSONObject();
         try {
             String ssid = cleanFluidSetting(rawSsid); String password = cleanFluidSetting(rawPassword);
             if (ssid.isEmpty()) throw new IllegalArgumentException("Home Wi-Fi name is required");
-            String host = "192.168.0.1";
+            String host = normalizeDirectHost(rawHost);
             String[] commands = new String[]{"$Sta/SSID=" + ssid, "$Sta/Password=" + password, "$Sta/IPMode=DHCP", "$WiFi/Mode=STA>AP"};
             JSONArray responses = new JSONArray();
             for (String c : commands) {
@@ -630,7 +650,7 @@ public class MainActivity extends Activity {
                 if (r.toLowerCase(java.util.Locale.US).contains("error:")) throw new java.io.IOException(r.trim());
             }
             out.put("success", true); out.put("responses", responses);
-            out.put("message", "Home Wi-Fi settings saved to FluidNC. Power-cycle the ESP32; it will join your router and keep its FluidNC AP as fallback.");
+            out.put("message", "Wi-Fi settings saved to FluidNC. Power-cycle the ESP32; it will join the new router/hotspot and keep its FluidNC AP as fallback.");
         } catch (Exception e) {
             try { out.put("success", false); out.put("detail", e.getMessage() == null ? e.toString() : e.getMessage()); } catch (Exception ignored) { }
         }
@@ -641,43 +661,64 @@ public class MainActivity extends Activity {
         return raw == null ? "" : raw.replace("\r", "").replace("\n", "").trim();
     }
 
-    private void discoverFluidNcOnLanAsync() {
-        discoveryLauncher.submit(() -> {
+    private void discoverFluidNcOnLanAsync(String preferredHost) {
+        directNetworkExecutor.submit(() -> {
             JSONObject found = null;
-            try {
-                String r = telnetCommandDefault("fluidnc.local", "$I", 1000);
-                if (r.contains("FluidNC")) {
-                    found = new JSONObject();
-                    String resolved = "fluidnc.local";
-                    try {
-                        String ip = InetAddress.getByName("fluidnc.local").getHostAddress();
-                        if (ip != null && !ip.trim().isEmpty()) resolved = ip;
-                    } catch (Exception ignored) { }
-                    found.put("host", resolved); found.put("response", r);
-                }
-            } catch (Exception ignored) { }
+            // 1) Fast path: last known/supplied IP. This is especially useful on
+            // the phone's own hotspot where Android's default network is cellular.
+            String preferred = preferredHost == null ? "" : preferredHost.trim();
+            if (!preferred.isEmpty()) {
+                try {
+                    String h = normalizeDirectHost(preferred);
+                    String r = telnetCommandDefault(h, "$I", 1100);
+                    if (r.contains("FluidNC") || r.contains("Grbl")) {
+                        found = new JSONObject(); found.put("host", h); found.put("response", r);
+                    }
+                } catch (Exception ignored) { }
+            }
+            // 2) mDNS on a normal home/studio LAN.
             if (found == null) {
-                String prefix = activeWifi24Prefix();
-                if (prefix != null) {
-                    ExecutorService pool = Executors.newFixedThreadPool(36);
+                try {
+                    String r = telnetCommandDefault("fluidnc.local", "$I", 1000);
+                    if (r.contains("FluidNC") || r.contains("Grbl")) {
+                        found = new JSONObject();
+                        String resolved = "fluidnc.local";
+                        try { String ip = InetAddress.getByName("fluidnc.local").getHostAddress(); if (ip != null && !ip.trim().isEmpty()) resolved = ip; } catch (Exception ignored) { }
+                        found.put("host", resolved); found.put("response", r);
+                    }
+                } catch (Exception ignored) { }
+            }
+            // 3) Scan every private IPv4 interface, not just Android's active
+            // Internet network. This includes the phone-hotspot/tether interface.
+            if (found == null) {
+                List<String> prefixes = local24Prefixes();
+                if (!prefixes.isEmpty()) {
+                    ExecutorService pool = Executors.newFixedThreadPool(40);
                     java.util.concurrent.atomic.AtomicReference<JSONObject> hit = new java.util.concurrent.atomic.AtomicReference<>();
                     List<Future<?>> jobs = new ArrayList<>();
-                    for (int i=1; i<=254; i++) {
-                        final String host = prefix + i;
-                        jobs.add(pool.submit(() -> {
-                            if (hit.get() != null) return;
-                            try {
-                                String r = telnetCommandDefault(host, "$I", 450);
-                                if (r.contains("FluidNC")) { JSONObject h = new JSONObject(); h.put("host", host); h.put("response", r); hit.compareAndSet(null, h); }
-                            } catch (Exception ignored) { }
-                        }));
+                    for (String prefix : prefixes) {
+                        for (int i=1; i<=254; i++) {
+                            final String host = prefix + i;
+                            if (!preferred.isEmpty() && host.equals(normalizeDirectHost(preferred))) continue;
+                            jobs.add(pool.submit(() -> {
+                                if (hit.get() != null) return;
+                                try {
+                                    String r = telnetCommandDefault(host, "$I", 420);
+                                    if (r.contains("FluidNC") || r.contains("Grbl")) {
+                                        JSONObject h = new JSONObject(); h.put("host", host); h.put("response", r); hit.compareAndSet(null, h);
+                                    }
+                                } catch (Exception ignored) { }
+                            }));
+                        }
                     }
                     for (Future<?> f : jobs) { if (hit.get() != null) break; try { f.get(); } catch (Exception ignored) { } }
                     pool.shutdownNow(); found = hit.get();
                 }
             }
             try {
-                JSONObject payload = new JSONObject(); payload.put("ok", found != null); if (found != null) payload.put("device", found); else payload.put("error", "No FluidNC controller found on the current Internet Wi-Fi.");
+                JSONObject payload = new JSONObject(); payload.put("ok", found != null);
+                if (found != null) payload.put("device", found);
+                else payload.put("error", "No FluidNC controller found on the current Wi-Fi / phone-hotspot network.");
                 deliverJs("window.__orynNativeFluidDiscovery&&window.__orynNativeFluidDiscovery(" + payload.toString() + ");");
             } catch (Exception ignored) { }
         });

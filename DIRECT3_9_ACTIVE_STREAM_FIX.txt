@@ -1,9 +1,0 @@
-ORYN Direct ESP32 V10.4.1 — DIRECT3.9 ACTIVE STATE + STABLE STREAM
-
-Fixes:
-1. Direct ESP32 becomes the current local transport in the Android table state after activation, so the header/API identity resolves to “ORYN Direct — ESP32 FluidNC” instead of remaining “ORYN Offline”.
-2. FluidNC planner back-pressure no longer becomes a false Read timed out around point 15/16. Pattern acknowledgement waits through short socket read timeouts with a bounded 180-second command deadline and remains Stop-interruptible.
-3. THR theta origin is shifted only by an integer multiple of 2π to the nearest equivalent current angle at the start of each file. This preserves all relative theta/rho geometry while preventing needless many-revolution lead-in moves in unwrapped THR files.
-4. Direct3.8 live full-circle/perimeter calibration, offline library, Pattern Designer, Pattern Forge, Smart Wi-Fi, phone-hotspot support, Home and saved calibration are retained.
-
-No FluidNC reflash/config change is required.

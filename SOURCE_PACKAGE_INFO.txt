@@ -1,0 +1,20 @@
+ORYN Android V10.4.1 — Unified Connection
+Build marker: ORYN-ANDROID-V10.4.1-UNIFIED-CONNECTION-20260901-1
+
+Purpose:
+- Offline-first ORYN Android app
+- Raspberry Pi ORYN connection path
+- Direct ESP32 / FluidNC connection path
+- Smart Wi-Fi, current-network and phone-hotspot discovery support
+- Manual IP fallback
+- Direct Full-Circle and Perimeter calibration
+- Direct Theta-Rho playback and live status/preview bridge
+- Bundled offline pattern library, Pattern Designer and Pattern Forge
+
+License:
+- ORYN-owned portions: PolyForm Noncommercial License 1.0.0
+- Commercial use requires a separate written commercial license
+- Third-party components remain under their own licenses/terms
+
+GitHub build artifact:
+ORYN-V10.4.1-unified-connection-debug.apk

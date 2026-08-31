@@ -1,6 +1,20 @@
-IMPORTANT — CURRENT TEST TABLE
+IMPORTANT — CURRENT WORKING TABLE
 
-Do NOT reflash the ESP32 just to install Direct3.3.
-This folder is retained only from the earlier Direct source package for reference compatibility.
-The user's current ESP32 already passed manual X/Y motor movement tests and Y steps_per_mm was corrected manually for the small Dune Weaver Mini test.
-Direct3.3 is an Android application fix. Install/build the APK only unless a controller reflash is explicitly requested later.
+Do NOT reflash the ESP32 just to install the ORYN Unified Connection Android app.
+
+This `esp32-fluidnc-config` folder is retained only as a reference controller package.
+The user's currently working ESP32/FluidNC setup has already been configured and calibrated
+on the physical table. Its active values may differ from the reference config.yaml in this
+folder.
+
+For an existing working table:
+1. Install/update the Android APK only.
+2. Keep the current FluidNC firmware and config unless a controller reflash is explicitly needed.
+3. Verify the live controller before changing anything with:
+   $I
+   $/axes/x/steps_per_mm
+   $/axes/y/steps_per_mm
+4. Use ORYN's Full-Circle and Perimeter calibration as the authoritative machine geometry.
+
+The reference `config.yaml` must NOT be copied over a working controller merely because it is
+included in this repository.
