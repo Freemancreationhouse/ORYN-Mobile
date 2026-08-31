@@ -36,15 +36,20 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Validate ORYN connection and coupled motion
+        run: |
+          node tests/test_connection_state.js
+          node tests/test_direct_coupled_motion.js
+
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN-V10.4.1-unified-connection-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN-V10.4.1-unified-motion-parity-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ORYN-V10.4.1-Unified-Connection-APK
-          path: ORYN-V10.4.1-unified-connection-debug.apk
+          name: ORYN-V10.4.1-Unified-Motion-Parity-APK
+          path: ORYN-V10.4.1-unified-motion-parity-debug.apk
           if-no-files-found: error

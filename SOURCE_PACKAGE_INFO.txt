@@ -18,3 +18,6 @@ License:
 
 GitHub build artifact:
 ORYN-V10.4.1-unified-connection-debug.apk
+
+Motion parity build: ORYN-ANDROID-V10.4.1-UNIFIED-MOTION-PARITY-20260901-1
+Direct playback: locked Pi V9 coupled Theta-Rho relative-delta formula

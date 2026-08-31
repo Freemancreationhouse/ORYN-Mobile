@@ -1,4 +1,4 @@
-# ORYN Android — Unified Pi + Direct ESP32
+# ORYN Android — Unified Pi + Direct ESP32 — Motion Parity
 
 This repository contains the consolidated ORYN Android application. It opens as a complete offline ORYN app and can then connect either to an ORYN Raspberry Pi table or directly to an ESP32 running FluidNC.
 
@@ -17,15 +17,24 @@ Open **ESP32 Smart Connect → Wi-Fi network setup (change anytime)** while Flui
 
 Direct calibration uses controller units, not physical millimetres. The current saved Theta full-revolution and Rho center-to-perimeter values are retained across app upgrades. Do not uninstall the app if you want Android local data/calibration preserved.
 
+
+## Direct ESP32 coupled Theta–Rho motion
+
+Direct ESP32 playback now uses the same **coupled relative-delta mathematics as the locked ORYN Pi V9 motion core**. It does not treat X and Y as independent absolute axes. For each THR point it computes logical `delta_theta` and `delta_rho`, scales them with the saved 360° / center-to-perimeter calibrations, and adds the mechanical Theta→Rho compensation term before sending one coordinated `G91 G21 G1 X… Y…` block.
+
+At the start of each motion session ORYN reads the controller's current X/Y `steps_per_mm`. The compact 28BYJ/Mini profile uses the proven gear ratio 32 / Mini winding; other profiles retain the V9 generic fallback. **No FluidNC settings are changed by this detection.**
+
+This correction is important for clears such as `clear_from_out.thr`: the file contains about 33 spiral revolutions. On the compact coupled mechanism, sending only the logical rho value makes the ball linger near the perimeter and the pattern can fail mechanically after only a few turns. The coupled V9 compensation keeps physical Rho synchronized with the THR path.
+
 ## Build APK with GitHub Actions
 
 Push this project to the `main` branch. The workflow `.github/workflows/build-android-apk.yml` builds with Android SDK 35, Java 17 and Gradle 8.9. Download the artifact named:
 
-`ORYN-V10.4.1-Unified-Connection-APK`
+`ORYN-V10.4.1-Unified-Motion-Parity-APK`
 
 The APK filename inside the artifact is:
 
-`ORYN-V10.4.1-unified-connection-debug.apk`
+`ORYN-V10.4.1-unified-motion-parity-debug.apk`
 
 ## Upgrade from earlier Direct builds
 

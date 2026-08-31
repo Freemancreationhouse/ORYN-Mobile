@@ -115,6 +115,14 @@ public class MainActivity extends Activity {
     private volatile double directTheta = 0.0;
     private volatile double directRho = 0.0;
     private volatile double directSpeed = 60.0;
+    // Live FluidNC/mechanism profile used by the coupled Theta-Rho motion core.
+    // Values are detected from the controller at motion start; they are not
+    // written back to FluidNC and therefore cannot disturb a working setup.
+    private volatile double directXStepsPerMm = 0.0;
+    private volatile double directYStepsPerMm = 0.0;
+    private volatile double directGearRatio = 0.0;
+    private volatile double directCouplingSign = 0.0;
+    private volatile String directMachineName = "";
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -384,6 +392,15 @@ public class MainActivity extends Activity {
             return true;
         }
 
+        @JavascriptInterface public String directMoveLogical(String host, double targetTheta, double targetRho, double thetaRevUnits, double rhoTravelUnits, double rhoDirection, double feed) {
+            JSONObject out = new JSONObject();
+            if (directRunning.get() || directHoming.get()) {
+                try { out.put("success", false); out.put("detail", "Direct motion is already active"); } catch (Exception ignored) {}
+                return out.toString();
+            }
+            return runDirectLogicalMove(host, targetTheta, targetRho, thetaRevUnits, rhoTravelUnits, rhoDirection, feed);
+        }
+
         @JavascriptInterface public String directStatus() {
             JSONObject o = new JSONObject();
             try {
@@ -392,6 +409,9 @@ public class MainActivity extends Activity {
                 o.put("current_file", directCurrentFile); o.put("current", directPoint); o.put("total", directTotal);
                 o.put("percentage", directTotal > 0 ? (100.0 * directPoint / directTotal) : 0.0);
                 o.put("theta", directTheta); o.put("rho", directRho); o.put("speed", directSpeed); o.put("error", directLastError);
+                o.put("x_steps_per_mm", directXStepsPerMm); o.put("y_steps_per_mm", directYStepsPerMm);
+                o.put("gear_ratio", directGearRatio); o.put("coupling_sign", directCouplingSign);
+                o.put("machine_name", directMachineName);
             } catch (Exception ignored) {}
             return o.toString();
         }
@@ -971,24 +991,138 @@ public class MainActivity extends Activity {
         }
     }
 
+    private static final class DirectKinematicsProfile {
+        double xStepsPerMm;
+        double yStepsPerMm;
+        double gearRatio;
+        double sourceSign;
+        String machineName;
+    }
+
+    private DirectKinematicsProfile detectDirectKinematics(String host) {
+        DirectKinematicsProfile k = new DirectKinematicsProfile();
+        String response = "";
+        try {
+            response = telnetCommand(host,
+                    "$I\n$/axes/x/steps_per_mm\n$/axes/y/steps_per_mm", 2500);
+        } catch (Exception ignored) { }
+
+        k.machineName = extractFluidNcMachineName(response);
+        k.xStepsPerMm = extractFluidNcSetting(response, "x", "steps_per_mm");
+        k.yStepsPerMm = extractFluidNcSetting(response, "y", "steps_per_mm");
+
+        String machine = k.machineName == null ? "" : k.machineName.toLowerCase(java.util.Locale.US);
+        // The user's compact 28BYJ / Dune-Weaver-style mechanism is the coupled
+        // Mini winding. Its proven source geometry uses gear ratio 32 and the
+        // negative coupling winding. For other ORYN profiles keep the V9 source
+        // fallback (ratio 10, positive winding) unless a future profile overrides it.
+        boolean miniByj = machine.contains("28byj") || machine.contains("mini");
+        k.gearRatio = miniByj ? 32.0 : 10.0;
+        k.sourceSign = miniByj ? -1.0 : 1.0;
+
+        // Do not overwrite controller settings. Fallbacks are used only if the
+        // readback was unavailable. The normal path uses the controller's actual
+        // current X/Y steps-per-mm, so 180 vs 210 is handled automatically.
+        if (!(k.xStepsPerMm > 0.0)) k.xStepsPerMm = miniByj ? 256.0 : 0.0;
+        if (!(k.yStepsPerMm > 0.0)) k.yStepsPerMm = miniByj ? 180.0 : 0.0;
+
+        directXStepsPerMm = k.xStepsPerMm;
+        directYStepsPerMm = k.yStepsPerMm;
+        directGearRatio = k.gearRatio;
+        directCouplingSign = k.sourceSign;
+        directMachineName = k.machineName == null ? "" : k.machineName;
+        return k;
+    }
+
+    private String extractFluidNcMachineName(String response) {
+        if (response == null) return "";
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(?im)\\[MSG:Machine:([^\\]\\r\\n]+)\\]")
+                .matcher(response);
+        return m.find() ? m.group(1).trim() : "";
+    }
+
+    private double extractFluidNcSetting(String response, String axis, String key) {
+        if (response == null) return 0.0;
+        String a = java.util.regex.Pattern.quote(axis);
+        String k = java.util.regex.Pattern.quote(key);
+        java.util.regex.Pattern[] ps = new java.util.regex.Pattern[]{
+                java.util.regex.Pattern.compile("(?im)\\$/axes/" + a + "/" + k + "\\s*=\\s*([-+0-9.eE]+)"),
+                java.util.regex.Pattern.compile("(?im)axes/" + a + "/" + k + "\\s*=\\s*([-+0-9.eE]+)")
+        };
+        for (java.util.regex.Pattern p : ps) {
+            java.util.regex.Matcher m = p.matcher(response);
+            if (m.find()) {
+                try { return Math.abs(Double.parseDouble(m.group(1))); } catch (Exception ignored) { }
+            }
+        }
+        return 0.0;
+    }
+
+    private double directCouplingOffset(double xIncrement, double rhoDirection, DirectKinematicsProfile k) {
+        if (k == null || !(k.xStepsPerMm > 0.0) || !(k.yStepsPerMm > 0.0) || !(k.gearRatio > 0.0)) return 0.0;
+        return xIncrement * (k.xStepsPerMm / (k.gearRatio * k.yStepsPerMm)) * k.sourceSign * rhoDirection;
+    }
+
+    private double planDirectFeed(double dx, double dy, double requestedFeed) {
+        // Match ORYN V9: the selected speed is a ceiling, never amplified.
+        // The current compact controller is already configured with higher axis
+        // max-rates than the default 60 feed, so no extra scaling is required.
+        return Math.max(0.5, requestedFeed > 0.0 ? requestedFeed : 1.0);
+    }
+
+    private String runDirectLogicalMove(String host, double targetTheta, double targetRho,
+                                        double thetaRevUnits, double rhoTravelUnits,
+                                        double rhoDirection, double feed) {
+        JSONObject result = new JSONObject();
+        try {
+            if (!Double.isFinite(targetTheta) || !Double.isFinite(targetRho) || targetRho < -0.0001 || targetRho > 1.0001)
+                throw new IllegalArgumentException("Invalid logical Theta-Rho target");
+            String h = normalizeDirectHost(host);
+            DirectKinematicsProfile kin = detectDirectKinematics(h);
+            double deltaTheta = targetTheta - directTheta;
+            double deltaRho = targetRho - directRho;
+            double dx = (deltaTheta / (Math.PI * 2.0)) * thetaRevUnits;
+            double dyGeometry = deltaRho * rhoTravelUnits * rhoDirection;
+            double dy = dyGeometry + directCouplingOffset(dx, rhoDirection, kin);
+            double f = planDirectFeed(dx, dy, feed);
+            String response = telnetCommand(h,
+                    String.format(java.util.Locale.US, "$X\nG91 G21 G1 X%.6f Y%.6f F%.3f\nG90", dx, dy, f),
+                    10000);
+            if (response.toLowerCase(java.util.Locale.US).contains("error:"))
+                throw new java.io.IOException(response.trim());
+            directTheta = targetTheta;
+            directRho = targetRho;
+            directControllerOnline = true;
+            directLastError = "";
+            result.put("success", true);
+            result.put("theta", directTheta); result.put("rho", directRho);
+            result.put("dx", dx); result.put("dy", dy);
+        } catch (Exception e) {
+            directLastError = e.getMessage() == null ? e.toString() : e.getMessage();
+            try { result.put("success", false); result.put("detail", directLastError); } catch (Exception ignored) {}
+        }
+        return result.toString();
+    }
+
     private void runDirectPattern(String host, String assetPathsJson, double thetaRevUnits, double rhoTravelUnits, double rhoDirection, double feed) {
+        Socket sock = null;
         try {
             JSONArray paths = new JSONArray(assetPathsJson);
             String h = normalizeDirectHost(host);
-            Socket sock = createDirectSocketForHost(h); directPatternSocket = sock;
+            DirectKinematicsProfile kin = detectDirectKinematics(h);
+
+            sock = createDirectSocketForHost(h); directPatternSocket = sock;
             sock.connect(new InetSocketAddress(h, 23), 2500);
-            // FluidNC/GRBL planner buffers are intentionally small (typically around
-            // 16 blocks).  Once the planner fills, the next `ok` is delayed until a
-            // queued motion block advances.  A 5-second socket timeout therefore
-            // caused valid long patterns to stop around point 15/16.  Keep a short
-            // read heartbeat, but let sendAndWaitOk() wait across those heartbeats.
+            // Planner acknowledgements may be delayed while the FluidNC buffer is
+            // full. Keep a short read heartbeat but allow long planner backpressure.
             sock.setSoTimeout(2000);
             directControllerOnline = true;
             OutputStream out = sock.getOutputStream(); InputStream in = sock.getInputStream();
             try { Thread.sleep(100); while (in.available() > 0) in.read(); } catch (Exception ignored) {}
             sendAndWaitOk(out, in, "$X");
-            sendAndWaitOk(out, in, "G90");
             sendAndWaitOk(out, in, "G21");
+
             for (int pi=0; pi<paths.length() && !directStopRequested.get(); pi++) {
                 Object item = paths.opt(pi);
                 String rel;
@@ -1022,40 +1156,69 @@ public class MainActivity extends Activity {
                     }
                 }
                 directTotal = pts.size(); directPoint = 0;
-                // Theta is periodic. Shift the entire pattern by an integer number
-                // of 2π turns so its first angle is the equivalent angle nearest
-                // the machine's current theta. This preserves every pattern delta
-                // and the drawn geometry, while avoiding unnecessary 50/100-turn
-                // lead-in moves present in some valid unwrapped THR files.
+
+                // Theta is periodic. Shift the entire file by an integer number of
+                // turns so its first angle is nearest the current logical theta.
                 double thetaOffset = 0.0;
                 if (!pts.isEmpty()) {
                     double firstTheta = pts.get(0)[0];
                     double turns = Math.rint((directTheta - firstTheta) / (Math.PI * 2.0));
                     thetaOffset = turns * Math.PI * 2.0;
                 }
+
+                int pointIndex = 0;
                 for (double[] pt : pts) {
                     if (directStopRequested.get()) break;
                     while (directPaused.get() && !directStopRequested.get()) Thread.sleep(80);
-                    double adjustedTheta = pt[0] + thetaOffset;
-                    directTheta = adjustedTheta; directRho = pt[1];
-                    double x = (adjustedTheta / (Math.PI * 2.0)) * thetaRevUnits;
-                    double y = pt[1] * rhoTravelUnits * rhoDirection;
-                    String g = String.format(java.util.Locale.US, "G1 X%.5f Y%.5f F%.3f", x, y, feed);
-                    sendAndWaitOk(out, in, g); directPoint++;
+
+                    double targetTheta = pt[0] + thetaOffset;
+                    double targetRho = pt[1];
+                    double deltaTheta = targetTheta - directTheta;
+                    double deltaRho = targetRho - directRho;
+
+                    // EXACT ORYN V9 / Dune-Weaver coupled Theta-Rho mathematics:
+                    // X is the logical theta delta scaled by the saved 360-degree
+                    // calibration. Y contains BOTH the logical rho delta and the
+                    // mechanical coupling compensation caused by theta rotation.
+                    double xIncrement = (deltaTheta / (Math.PI * 2.0)) * thetaRevUnits;
+                    double yGeometryIncrement = deltaRho * rhoTravelUnits * rhoDirection;
+                    double couplingOffset = directCouplingOffset(xIncrement, rhoDirection, kin);
+                    double yIncrement = yGeometryIncrement + couplingOffset;
+                    double plannedFeed = planDirectFeed(xIncrement, yIncrement, feed);
+
+                    if (!Double.isFinite(xIncrement) || !Double.isFinite(yIncrement))
+                        throw new java.io.IOException("Invalid coupled Theta-Rho motor delta");
+
+                    String g = String.format(java.util.Locale.US,
+                            "G91 G21 G1 X%.6f Y%.6f F%.3f",
+                            xIncrement, yIncrement, plannedFeed);
+                    sendAndWaitOk(out, in, g);
+
+                    directTheta = targetTheta;
+                    directRho = targetRho;
+                    directPoint++;
+
+                    // The first point is the physical entry position. For
+                    // clear_from_out this is the perimeter. Match the Pi V9 core:
+                    // wait for that entry move before preview/progress continues.
+                    if (pointIndex == 0 && !directStopRequested.get())
+                        waitForDirectIdle(out, in, 120000L);
+                    pointIndex++;
                 }
-                // FluidNC `ok` confirms that a block was accepted, not that the
-                // motors physically completed it. Keep playback active until the
-                // planner reports Idle so UI completion follows real motion.
-                if (!directStopRequested.get()) waitForDirectIdle(out, in, 240000L);
+
+                if (!directStopRequested.get()) waitForDirectIdle(out, in, 300000L);
             }
+
+            // Leave FluidNC in a predictable absolute mode for manual terminal use.
+            if (!directStopRequested.get()) sendAndWaitOk(out, in, "G90", 15000L);
         } catch (Exception e) {
             String detail = e.getMessage() == null ? e.toString() : e.getMessage();
             String file = directCurrentFile == null ? "pattern" : directCurrentFile;
             directLastError = "Pattern " + file + " stopped at point " + directPoint + "/" + directTotal + ": " + detail;
         }
         finally {
-            Socket s = directPatternSocket; directPatternSocket = null;
-            try { if (s != null) s.close(); } catch (Exception ignored) {}
+            if (directPatternSocket == sock) directPatternSocket = null;
+            try { if (sock != null) sock.close(); } catch (Exception ignored) {}
             directRunning.set(false); directPaused.set(false); directStopRequested.set(false); directCurrentFile = null;
         }
     }
