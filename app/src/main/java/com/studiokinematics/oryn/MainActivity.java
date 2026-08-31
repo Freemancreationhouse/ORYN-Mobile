@@ -300,7 +300,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.6-stable-session"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct3.7-offline-start"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
