@@ -118,6 +118,9 @@ public class MainActivity extends Activity {
     private final AtomicBoolean directHoming = new AtomicBoolean(false);
     private volatile boolean directControllerOnline = false;
     private volatile Socket directPatternSocket;
+    // Direct pattern playback owns one persistent FluidNC WebSocket channel on
+    // port 81. Home/calibration/manual actions remain on the existing Telnet path.
+    private volatile DirectFluidNcWebSocketSession directPatternWsSession;
     private final Object directSocketWriteLock = new Object();
     private volatile WifiManager.WifiLock directMotionWifiLock;
     private volatile PowerManager.WakeLock directMotionWakeLock;
@@ -428,6 +431,7 @@ public class MainActivity extends Activity {
                 o.put("gear_ratio", directGearRatio); o.put("coupling_sign", directCouplingSign);
                 o.put("machine_name", directMachineName);
                 o.put("last_tx", directLastTx); o.put("last_rx", directLastRx);
+                o.put("pattern_transport", directPatternWsSession != null ? "FluidNC WebSocket :81" : null);
             } catch (Exception ignored) {}
             return o.toString();
         }
@@ -1016,16 +1020,23 @@ public class MainActivity extends Activity {
     }
 
     private DirectKinematicsProfile detectDirectKinematics(String host) {
-        DirectKinematicsProfile k = new DirectKinematicsProfile();
         String response = "";
         try {
             response = telnetCommand(host,
                     "$I\n$/axes/x/steps_per_mm\n$/axes/y/steps_per_mm", 2500);
         } catch (Exception ignored) { }
+        return directKinematicsFromResponse(response);
+    }
 
+    private DirectKinematicsProfile directKinematicsFromResponse(String response) {
+        DirectKinematicsProfile k = new DirectKinematicsProfile();
         k.machineName = extractFluidNcMachineName(response);
         k.xStepsPerMm = extractFluidNcSetting(response, "x", "steps_per_mm");
         k.yStepsPerMm = extractFluidNcSetting(response, "y", "steps_per_mm");
+        if ((k.machineName == null || k.machineName.trim().isEmpty()) && directMachineName != null)
+            k.machineName = directMachineName;
+        if (!(k.xStepsPerMm > 0.0) && directXStepsPerMm > 0.0) k.xStepsPerMm = directXStepsPerMm;
+        if (!(k.yStepsPerMm > 0.0) && directYStepsPerMm > 0.0) k.yStepsPerMm = directYStepsPerMm;
 
         String machine = k.machineName == null ? "" : k.machineName.toLowerCase(java.util.Locale.US);
         // ORYN Mini / 28BYJ-48 measured physical coupling (confirmed on the
@@ -1033,7 +1044,9 @@ public class MainActivity extends Activity {
         // These are mechanical/controller scale constants, NOT the user's saved
         // Full Circle or Perimeter calibration values. Those live values are
         // still supplied separately as thetaRevUnits / rhoTravelUnits.
-        boolean miniByj = machine.contains("28byj") || machine.contains("mini");
+        boolean miniByj = machine.contains("28byj") || machine.contains("mini")
+                || (Math.abs(k.xStepsPerMm - MINI_X_STEPS_PER_MM) < 0.01
+                    && Math.abs(k.yStepsPerMm - MINI_Y_STEPS_PER_MM) < 0.01);
         if (miniByj) {
             k.xStepsPerMm = MINI_X_STEPS_PER_MM;
             k.yStepsPerMm = MINI_Y_STEPS_PER_MM;
@@ -1179,125 +1192,274 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * One persistent FluidNC Telnet reader for the complete Direct clear + pattern
-     * sequence. The old implementation read arbitrary TCP chunks directly inside
-     * each command wait. A valid "ok" could therefore be fragmented or mixed with
-     * Telnet/status traffic and leave Android waiting while FluidNC had already
-     * become Idle. This reader frames protocol replies once and never reads ahead
-     * in a command-specific loop.
+     * One persistent FluidNC WebSocket motion channel for the complete Direct
+     * clear + pattern sequence. FluidNC exposes a Grbl-compatible WebSocket
+     * channel on port 81 (HTTP port + 1). Commands and their real ok/error
+     * acknowledgements stay on this single connection for the whole job.
+     *
+     * Socket read timeouts are only reader heartbeats. They never complete,
+     * abort, or resend a relative move.
      */
-    private final class DirectFluidNcSession implements AutoCloseable {
+    private final class DirectFluidNcWebSocketSession implements AutoCloseable {
+        private static final String WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         private final Socket socket;
         private final InputStream input;
         private final OutputStream output;
         private final BlockingQueue<String> lineReplies = new LinkedBlockingQueue<>();
         private final BlockingQueue<String> statusFrames = new LinkedBlockingQueue<>();
         private final AtomicBoolean closed = new AtomicBoolean(false);
+        private final java.security.SecureRandom maskRandom = new java.security.SecureRandom();
         private volatile Exception readerFailure;
         private final Thread readerThread;
 
-        DirectFluidNcSession(Socket socket) throws Exception {
+        DirectFluidNcWebSocketSession(Socket socket, String host) throws Exception {
             this.socket = socket;
             this.input = socket.getInputStream();
             this.output = socket.getOutputStream();
-            this.readerThread = new Thread(this::readerLoop, "ORYN-FluidNC-DirectReader");
+            performHandshake(host);
+            // The persistent reader uses a short SO_TIMEOUT only as a wake-up
+            // heartbeat. A timeout never means EOF, completion, or failure.
+            this.socket.setSoTimeout(1000);
+            this.readerThread = new Thread(this::readerLoop, "ORYN-FluidNC-DirectWebSocketReader");
             this.readerThread.setDaemon(true);
             this.readerThread.start();
         }
 
-        private void offerLine(StringBuilder line) {
-            String text = line.toString().trim();
-            line.setLength(0);
-            if (text.isEmpty()) return;
-            directLastRx = text;
-            lineReplies.offer(text);
+        private void performHandshake(String host) throws Exception {
+            socket.setSoTimeout(3500);
+            byte[] nonce = new byte[16];
+            maskRandom.nextBytes(nonce);
+            String key = Base64.encodeToString(nonce, Base64.NO_WRAP);
+            String request = "GET / HTTP/1.1\r\n"
+                    + "Host: " + host + ":81\r\n"
+                    + "Upgrade: websocket\r\n"
+                    + "Connection: Upgrade\r\n"
+                    + "Sec-WebSocket-Key: " + key + "\r\n"
+                    + "Sec-WebSocket-Version: 13\r\n"
+                    + "Origin: http://" + host + "\r\n\r\n";
+            synchronized (directSocketWriteLock) {
+                output.write(request.getBytes(StandardCharsets.ISO_8859_1));
+                output.flush();
+            }
+
+            java.io.ByteArrayOutputStream headers = new java.io.ByteArrayOutputStream();
+            long deadline = System.currentTimeMillis() + 5000L; // handshake only; no motion has been sent
+            int matched = 0;
+            byte[] terminator = new byte[]{'\r','\n','\r','\n'};
+            while (matched < terminator.length) {
+                if (directStopRequested.get()) throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
+                if (System.currentTimeMillis() >= deadline) throw new java.io.IOException("FluidNC WebSocket handshake timed out before motion start");
+                int b;
+                try { b = input.read(); }
+                catch (java.net.SocketTimeoutException timeout) { continue; }
+                if (b < 0) throw new java.io.EOFException("FluidNC WebSocket closed during handshake");
+                headers.write(b);
+                if ((byte)b == terminator[matched]) matched++;
+                else matched = ((byte)b == terminator[0]) ? 1 : 0;
+                if (headers.size() > 16384) throw new java.io.IOException("FluidNC WebSocket handshake response was too large");
+            }
+            String response = headers.toString(StandardCharsets.ISO_8859_1.name());
+            String first = response.split("\\r?\\n", 2)[0].trim();
+            if (!first.contains(" 101 ")) throw new java.io.IOException("FluidNC WebSocket upgrade failed: " + first);
+
+            String accept = "";
+            for (String line : response.split("\\r?\\n")) {
+                int colon = line.indexOf(':');
+                if (colon > 0 && line.substring(0, colon).trim().equalsIgnoreCase("Sec-WebSocket-Accept")) {
+                    accept = line.substring(colon + 1).trim();
+                    break;
+                }
+            }
+            java.security.MessageDigest sha1 = java.security.MessageDigest.getInstance("SHA-1");
+            String expected = Base64.encodeToString(
+                    sha1.digest((key + WS_GUID).getBytes(StandardCharsets.ISO_8859_1)), Base64.NO_WRAP);
+            if (!expected.equals(accept)) throw new java.io.IOException("FluidNC WebSocket handshake validation failed");
+        }
+
+        private int readFrameByte() throws Exception {
+            while (!closed.get()) {
+                try {
+                    int b = input.read();
+                    if (b < 0) throw new java.io.EOFException("FluidNC WebSocket connection closed");
+                    return b;
+                } catch (java.net.SocketTimeoutException timeout) {
+                    // Waiting/backpressure only. Preserve the partially read frame.
+                }
+            }
+            throw new java.io.EOFException("FluidNC WebSocket connection closed");
+        }
+
+        private void readFully(byte[] dst, int off, int len) throws Exception {
+            int done = 0;
+            while (done < len) {
+                if (closed.get()) throw new java.io.EOFException("FluidNC WebSocket connection closed");
+                try {
+                    int n = input.read(dst, off + done, len - done);
+                    if (n < 0) throw new java.io.EOFException("FluidNC WebSocket connection closed");
+                    done += n;
+                } catch (java.net.SocketTimeoutException timeout) {
+                    // Waiting/backpressure only. Never discard a partial frame.
+                }
+            }
+        }
+
+        private long readLength64() throws Exception {
+            long len = 0L;
+            for (int i = 0; i < 8; i++) len = (len << 8) | (readFrameByte() & 0xffL);
+            return len;
         }
 
         private void readerLoop() {
-            StringBuilder line = new StringBuilder();
-            StringBuilder status = new StringBuilder();
-            boolean inStatus = false;
-            int telnetState = 0; // 0=data, 1=IAC, 2=IAC option, 3=SB, 4=SB-IAC
-            byte[] buf = new byte[512];
+            java.io.ByteArrayOutputStream fragmented = null;
             try {
                 while (!closed.get()) {
-                    int n;
-                    try { n = input.read(buf); }
-                    catch (java.net.SocketTimeoutException timeout) { continue; }
-                    if (n < 0) throw new java.io.EOFException("FluidNC connection closed");
-                    for (int i = 0; i < n; i++) {
-                        int ub = buf[i] & 0xff;
-
-                        // Strip Telnet IAC negotiation bytes so they can never
-                        // corrupt a real FluidNC "ok"/"error" line.
-                        if (telnetState != 0) {
-                            if (telnetState == 1) {
-                                if (ub == 255) { telnetState = 0; continue; }
-                                if (ub == 250) { telnetState = 3; continue; }
-                                if (ub >= 251 && ub <= 254) { telnetState = 2; continue; }
-                                telnetState = 0; continue;
-                            }
-                            if (telnetState == 2) { telnetState = 0; continue; }
-                            if (telnetState == 3) { if (ub == 255) telnetState = 4; continue; }
-                            if (telnetState == 4) { telnetState = (ub == 240) ? 0 : 3; continue; }
-                        }
-                        if (ub == 255) { telnetState = 1; continue; }
-
-                        char ch = (char) ub;
-                        if (inStatus) {
-                            status.append(ch);
-                            if (ch == '>') {
-                                String frame = status.toString().trim();
-                                status.setLength(0); inStatus = false;
-                                if (!frame.isEmpty()) { directLastRx = frame; statusFrames.offer(frame); }
-                            }
-                            continue;
-                        }
-                        if (ch == '<') {
-                            if (line.length() > 0) offerLine(line);
-                            inStatus = true; status.setLength(0); status.append(ch);
-                            continue;
-                        }
-                        if (ch == '\r' || ch == '\n') {
-                            if (line.length() > 0) offerLine(line);
-                            continue;
-                        }
-                        if (ub >= 0x20 && ub != 0x7f) {
-                            line.append(ch);
-                            // FluidNC normally terminates ok with CR/LF, but accept
-                            // the complete standalone token immediately too. This
-                            // covers Telnet stacks that deliver CR separately/later.
-                            if (line.toString().trim().equalsIgnoreCase("ok")) offerLine(line);
-                        }
+                    int b1;
+                    try {
+                        b1 = input.read();
+                        if (b1 < 0) throw new java.io.EOFException("FluidNC WebSocket connection closed");
+                    } catch (java.net.SocketTimeoutException timeout) {
+                        continue; // heartbeat only
                     }
+                    int b2 = readFrameByte();
+                    boolean fin = (b1 & 0x80) != 0;
+                    int opcode = b1 & 0x0f;
+                    boolean masked = (b2 & 0x80) != 0;
+                    long length = b2 & 0x7f;
+                    if (length == 126) length = ((readFrameByte() & 0xffL) << 8) | (readFrameByte() & 0xffL);
+                    else if (length == 127) length = readLength64();
+                    if (length < 0 || length > 4L * 1024L * 1024L) throw new java.io.IOException("FluidNC WebSocket frame is too large");
+                    byte[] mask = null;
+                    if (masked) { mask = new byte[4]; readFully(mask, 0, 4); }
+                    byte[] payload = new byte[(int)length];
+                    if (payload.length > 0) readFully(payload, 0, payload.length);
+                    if (mask != null) for (int i = 0; i < payload.length; i++) payload[i] = (byte)(payload[i] ^ mask[i & 3]);
+
+                    if (opcode == 0x8) throw new java.io.EOFException("FluidNC WebSocket closed the motion channel");
+                    if (opcode == 0x9) { sendFrame(0xA, payload); continue; } // protocol ping -> pong
+                    if (opcode == 0xA) continue;
+
+                    if (opcode == 0x0) {
+                        if (fragmented == null) continue;
+                        fragmented.write(payload, 0, payload.length);
+                        if (fin) {
+                            handleProtocolMessage(fragmented.toByteArray());
+                            fragmented = null;
+                        }
+                        continue;
+                    }
+                    if (opcode != 0x1 && opcode != 0x2) continue;
+                    if (!fin) {
+                        fragmented = new java.io.ByteArrayOutputStream();
+                        fragmented.write(payload, 0, payload.length);
+                        continue;
+                    }
+                    // FluidNC can use text or binary WebSocket messages for console output.
+                    handleProtocolMessage(payload);
                 }
             } catch (Exception e) {
                 if (!closed.get()) readerFailure = e;
-            } finally {
-                if (line.length() > 0) offerLine(line);
             }
+        }
+
+        private void handleProtocolMessage(byte[] payload) {
+            if (payload == null || payload.length == 0) return;
+            String text = new String(payload, StandardCharsets.UTF_8).replace("\u0000", "");
+            String trimmed = text.trim();
+            if (!trimmed.isEmpty()) directLastRx = trimmed;
+
+            // WebSocket message boundaries are preserved, so management traffic
+            // such as CURRENT_ID / ACTIVE_ID / PING can never become glued to a
+            // later "ok" token as happened with arbitrary raw TCP chunk parsing.
+            String[] pieces = text.split("\\r?\\n", -1);
+            for (String piece : pieces) {
+                String work = piece == null ? "" : piece.trim();
+                if (work.isEmpty()) continue;
+
+                StringBuilder nonStatus = new StringBuilder();
+                int cursor = 0;
+                while (cursor < work.length()) {
+                    int lt = work.indexOf('<', cursor);
+                    if (lt < 0) { nonStatus.append(work.substring(cursor)); break; }
+                    if (lt > cursor) nonStatus.append(work, cursor, lt);
+                    int gt = work.indexOf('>', lt + 1);
+                    if (gt < 0) { nonStatus.append(work.substring(lt)); break; }
+                    String frame = work.substring(lt, gt + 1).trim();
+                    if (!frame.isEmpty()) statusFrames.offer(frame);
+                    cursor = gt + 1;
+                }
+                String line = nonStatus.toString().trim();
+                if (!line.isEmpty()) lineReplies.offer(line);
+            }
+        }
+
+        private void sendFrame(int opcode, byte[] payload) throws Exception {
+            checkTransport();
+            sendFrameUnchecked(opcode, payload);
+        }
+
+        private void sendFrameUnchecked(int opcode, byte[] payload) throws Exception {
+            if (closed.get() || socket.isClosed() || !socket.isConnected())
+                throw new java.io.EOFException("FluidNC WebSocket connection closed");
+            if (payload == null) payload = new byte[0];
+            byte[] mask = new byte[4];
+            maskRandom.nextBytes(mask);
+            java.io.ByteArrayOutputStream frame = new java.io.ByteArrayOutputStream(payload.length + 16);
+            frame.write(0x80 | (opcode & 0x0f));
+            int len = payload.length;
+            if (len <= 125) frame.write(0x80 | len);
+            else if (len <= 0xffff) {
+                frame.write(0x80 | 126); frame.write((len >>> 8) & 0xff); frame.write(len & 0xff);
+            } else {
+                frame.write(0x80 | 127);
+                long x = len;
+                for (int shift = 56; shift >= 0; shift -= 8) frame.write((int)((x >>> shift) & 0xff));
+            }
+            frame.write(mask, 0, mask.length);
+            for (int i = 0; i < payload.length; i++) frame.write(payload[i] ^ mask[i & 3]);
+            synchronized (directSocketWriteLock) {
+                output.write(frame.toByteArray());
+                output.flush();
+            }
+        }
+
+        private void sendText(String text) throws Exception {
+            sendFrame(0x1, String.valueOf(text == null ? "" : text).getBytes(StandardCharsets.UTF_8));
         }
 
         private void checkTransport() throws Exception {
             if (directStopRequested.get()) throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
             if (readerFailure != null) throw readerFailure;
-            if (socket.isClosed() || !socket.isConnected()) throw new java.io.EOFException("FluidNC connection closed");
+            if (closed.get() || socket.isClosed() || !socket.isConnected()) throw new java.io.EOFException("FluidNC WebSocket connection closed");
+        }
+
+        void discardStartupTraffic() throws Exception {
+            // Only before any movement: drain WebSocket management messages
+            // (CURRENT_ID, ACTIVE_ID, PING) so no startup text can be mistaken
+            // for a command acknowledgement.
+            long end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(180);
+            while (System.nanoTime() < end) {
+                checkTransport();
+                String line = lineReplies.poll(25, TimeUnit.MILLISECONDS);
+                if (line != null) {
+                    String z = line.trim().toLowerCase(java.util.Locale.US);
+                    if (containsFluidNcAlarm(z) || z.startsWith("error:")) throw new java.io.IOException(line);
+                }
+                String frame = statusFrames.poll();
+                if (frame != null) {
+                    String z = frame.toLowerCase(java.util.Locale.US);
+                    if (containsFluidNcAlarm(z) || z.contains("<alarm")) throw new java.io.IOException(frame);
+                }
+            }
         }
 
         void sendCommandAndWaitOk(String command) throws Exception {
             checkTransport();
             directLastTx = command;
-            byte[] bytes = (command + "\n").getBytes(StandardCharsets.UTF_8);
-            // Exactly one line transmission. If its acknowledgement is delayed,
-            // keep waiting forever (unless Stop/error/disconnect); never resend.
-            synchronized (directSocketWriteLock) {
-                output.write(bytes);
-                output.flush();
-            }
+            // Exactly one WebSocket text transmission. If acknowledgement is
+            // delayed, wait without deadline and NEVER resend the relative move.
+            sendText(command + "\n");
             while (true) {
                 checkTransport();
-                // Status frames are asynchronous. Alarm is fatal, but Idle/Run
-                // can never substitute for this command's required real "ok".
                 String asyncStatus = statusFrames.poll();
                 if (asyncStatus != null) {
                     String zs = asyncStatus.toLowerCase(java.util.Locale.US);
@@ -1305,26 +1467,58 @@ public class MainActivity extends Activity {
                         throw new java.io.IOException(asyncStatus);
                 }
                 String reply = lineReplies.poll(500, TimeUnit.MILLISECONDS);
-                if (reply == null) continue; // backpressure / socket gap, not completion
+                if (reply == null) continue; // waiting/backpressure, not completion
                 String z = reply.trim().toLowerCase(java.util.Locale.US);
                 if (z.equals("ok")) return;
                 if (containsFluidNcAlarm(z) || z.startsWith("error:") || z.contains("\nerror:"))
                     throw new java.io.IOException(reply);
-                // Command echo, banner and [MSG:...] lines are informational.
+                // CURRENT_ID / ACTIVE_ID / PING / [MSG:...] are informational.
             }
+        }
+
+        String sendCommandAndCollectUntilOk(String command) throws Exception {
+            checkTransport();
+            directLastTx = command;
+            sendText(command + "\n");
+            StringBuilder collected = new StringBuilder();
+            while (true) {
+                checkTransport();
+                String asyncStatus = statusFrames.poll();
+                if (asyncStatus != null) {
+                    String zs = asyncStatus.toLowerCase(java.util.Locale.US);
+                    if (zs.contains("<alarm") || containsFluidNcAlarm(zs) || zs.contains("error:"))
+                        throw new java.io.IOException(asyncStatus);
+                }
+                String reply = lineReplies.poll(500, TimeUnit.MILLISECONDS);
+                if (reply == null) continue;
+                String z = reply.trim().toLowerCase(java.util.Locale.US);
+                if (z.equals("ok")) return collected.toString();
+                if (containsFluidNcAlarm(z) || z.startsWith("error:") || z.contains("\nerror:"))
+                    throw new java.io.IOException(reply);
+                if (collected.length() > 0) collected.append('\n');
+                collected.append(reply);
+            }
+        }
+
+        void sendRealtime(byte command) throws Exception {
+            checkTransport();
+            directLastTx = String.format(java.util.Locale.US, "realtime:0x%02X", command & 0xff);
+            sendText(String.valueOf((char)(command & 0xff)));
+        }
+
+        void sendEmergencyReset() throws Exception {
+            // Stop is allowed after directStopRequested is set. Send ctrl-X once
+            // as a valid WebSocket text frame, then the caller closes the channel.
+            directLastTx = "realtime:0x18";
+            sendFrameUnchecked(0x1, new byte[]{0x18});
         }
 
         void waitUntilIdle() throws Exception {
             while (true) {
                 checkTransport();
-                // Discard only old status frames; an outstanding relative command
-                // is never present here because sendCommandAndWaitOk already got ok.
                 statusFrames.clear();
                 directLastTx = "?";
-                synchronized (directSocketWriteLock) {
-                    output.write('?');
-                    output.flush();
-                }
+                sendText("?");
                 long nextQuery = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1400);
                 while (System.nanoTime() < nextQuery) {
                     checkTransport();
@@ -1332,15 +1526,14 @@ public class MainActivity extends Activity {
                     if (frame != null) {
                         String z = frame.toLowerCase(java.util.Locale.US);
                         if (z.contains("<idle")) return;
-                        if (containsFluidNcAlarm(z) || z.contains("error:")) throw new java.io.IOException(frame);
+                        if (containsFluidNcAlarm(z) || z.contains("<alarm") || z.contains("error:"))
+                            throw new java.io.IOException(frame);
                         break; // Run/Jog/Hold: ask again after a short interval.
                     }
                     String line = lineReplies.poll();
                     if (line != null) {
                         String z = line.trim().toLowerCase(java.util.Locale.US);
                         if (containsFluidNcAlarm(z) || z.startsWith("error:")) throw new java.io.IOException(line);
-                        // No command is outstanding here, so informational/stray ok
-                        // cannot acknowledge any future movement and is discarded.
                     }
                 }
                 Thread.sleep(100);
@@ -1356,26 +1549,27 @@ public class MainActivity extends Activity {
 
     private void runDirectPattern(String host, String assetPathsJson, double thetaRevUnits, double rhoTravelUnits, double rhoDirection, double feed) {
         Socket sock = null;
-        DirectFluidNcSession session = null;
+        DirectFluidNcWebSocketSession session = null;
         acquireDirectPatternRuntimeLocks();
         try {
             JSONArray paths = new JSONArray(assetPathsJson);
             String h = normalizeDirectHost(host);
-            DirectKinematicsProfile kin = detectDirectKinematics(h);
-
-            // One exclusive Telnet motion session owns FluidNC for the complete
-            // clear + pattern sequence. No polling/probe socket is opened while
-            // directRunning/directHoming is active.
+            // One exclusive FluidNC WebSocket motion session owns the complete
+            // clear + pattern sequence. Home/calibration/manual commands keep the
+            // existing Telnet path; only Direct pattern playback uses port 81.
             sock = createDirectSocketForHost(h); directPatternSocket = sock;
-            sock.connect(new InetSocketAddress(h, 23), 2500);
+            sock.connect(new InetSocketAddress(h, 81), 2500);
             sock.setKeepAlive(true);
             sock.setTcpNoDelay(true);
-            // SO_TIMEOUT is only the persistent reader heartbeat. A timeout is
-            // waiting/backpressure and never ends or acknowledges pattern motion.
-            sock.setSoTimeout(1000);
             directControllerOnline = true;
-            session = new DirectFluidNcSession(sock);
+            session = new DirectFluidNcWebSocketSession(sock, h);
+            directPatternWsSession = session;
+            session.discardStartupTraffic();
             session.sendCommandAndWaitOk("$X");
+            String profileResponse = session.sendCommandAndCollectUntilOk("$I") + "\n"
+                    + session.sendCommandAndCollectUntilOk("$/axes/x/steps_per_mm") + "\n"
+                    + session.sendCommandAndCollectUntilOk("$/axes/y/steps_per_mm");
+            DirectKinematicsProfile kin = directKinematicsFromResponse(profileResponse);
             session.sendCommandAndWaitOk("G21");
 
             for (int pi=0; pi<paths.length() && !directStopRequested.get(); pi++) {
@@ -1480,7 +1674,7 @@ public class MainActivity extends Activity {
                 }
             }
 
-            // Restore absolute mode only AFTER all THR files and final Idle.
+            // Restore absolute mode only AFTER all THR files and final Idle on the same WebSocket channel.
             if (!directStopRequested.get()) session.sendCommandAndWaitOk("G90");
         } catch (Exception e) {
             String detail = e.getMessage() == null ? e.toString() : e.getMessage();
@@ -1488,6 +1682,7 @@ public class MainActivity extends Activity {
             directLastError = "Pattern " + file + " stopped at point " + directPoint + "/" + directTotal + ": " + detail;
         }
         finally {
+            if (directPatternWsSession == session) directPatternWsSession = null;
             if (directPatternSocket == sock) directPatternSocket = null;
             try { if (session != null) session.close(); else if (sock != null) sock.close(); } catch (Exception ignored) {}
             releaseDirectPatternRuntimeLocks();
@@ -1537,6 +1732,8 @@ public class MainActivity extends Activity {
 
     private void directRealtime(byte b) {
         try {
+            DirectFluidNcWebSocketSession ws = directPatternWsSession;
+            if (ws != null) { ws.sendRealtime(b); return; }
             Socket s = directPatternSocket;
             if (s != null && s.isConnected() && !s.isClosed()) synchronized (directSocketWriteLock) {
                 s.getOutputStream().write(b); s.getOutputStream().flush();
@@ -1546,6 +1743,12 @@ public class MainActivity extends Activity {
 
     private void directStop() {
         directStopRequested.set(true); directPaused.set(false);
+        DirectFluidNcWebSocketSession ws = directPatternWsSession;
+        if (ws != null) {
+            try { ws.sendEmergencyReset(); } catch (Exception ignored) { }
+            try { ws.close(); } catch (Exception ignored) { }
+            return;
+        }
         try {
             Socket s = directPatternSocket;
             if (s != null && s.isConnected() && !s.isClosed()) synchronized (directSocketWriteLock) {

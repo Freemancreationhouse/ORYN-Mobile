@@ -1,12 +1,12 @@
-# ORYN Android V10.4.1 — Direct ESP32 Persistent Streaming + Clear Direction Fix Validation
+# ORYN Android V10.4.1 — Direct ESP32 WebSocket Streaming Validation
 
-Build: `ORYN-ANDROID-V10.4.1-DIRECT-PERSISTENT-STREAM-CLEAR-20260901-3`
+Build: `ORYN-ANDROID-V10.4.1-DIRECT-WS-STREAM-20260901-4`
 
 ## Scope lock
 
-Only the Android Direct ESP32 / FluidNC pattern-motion path was changed. The locked visual UI bundle is unchanged; one offline Direct bridge mapping was corrected so the existing clear-mode values reach the correct bundled THR clear files. Existing Pi support, connection flows, Home, calibration UI/actions, 100-pattern library, Pattern Designer, Pattern Forge, branding, and license remain preserved.
+This build is based on the previous measured-motion + persistent-stream + clear-direction full source. Only the Android native Direct ESP32 pattern-motion transport was changed for this build, plus validation/release metadata and the GitHub Actions validation list/artifact name.
 
-One additional normal Android permission, `WAKE_LOCK`, is present only so the app can hold Direct pattern Wi-Fi/CPU execution while a pattern is actively streaming. It does not change Wi-Fi selection or connection behavior.
+The locked web UI/assets are byte-for-byte unchanged from the supplied previous build. Pi support, Home, Full Circle calibration, Perimeter calibration, Wi-Fi/home-hotspot/manual-IP flows, 100 offline patterns, Pattern Designer, Pattern Forge, branding, and license remain preserved.
 
 ## Measured Mini coupling
 
@@ -19,39 +19,51 @@ One additional normal Android permission, `WAKE_LOCK`, is present only so the ap
 
 Saved live Full Circle / Perimeter calibration remains authoritative through `thetaRevUnits`, `rhoTravelUnits`, and `rhoDirection`; those values are not hardcoded.
 
-## Persistent Direct FluidNC streamer
+## Direct FluidNC pattern streamer
 
-PASS — one exclusive Telnet socket owns the complete clear + pattern sequence.
+PASS — pattern playback uses one exclusive FluidNC WebSocket motion connection on port `81` for the complete clear + drawing sequence.
 
-PASS — one persistent reader thread frames all FluidNC line acknowledgements and `<...>` status frames for the life of that socket.
+PASS — machine name and X/Y steps-per-mm needed by the motion core are read through that same WebSocket channel before movement; pattern playback does not open a second Telnet client.
 
-PASS — fragmented acknowledgement bytes such as `o` followed later by `k\r\n` are reconstructed as one real `ok`.
+PASS — WebSocket handshake uses and validates `Sec-WebSocket-Key` / `Sec-WebSocket-Accept`.
 
-PASS — incoming Telnet IAC negotiation bytes are stripped before parsing and cannot corrupt `ok`/`error` tokens.
+PASS — Android client WebSocket frames are masked as required by RFC 6455.
 
-PASS — `TCP_NODELAY` and TCP keepalive are enabled on the Direct motion socket.
+PASS — FluidNC text and binary console messages are accepted.
 
-PASS — Android Direct pattern playback holds high-performance Wi-Fi and a partial CPU wake lock only while streaming.
+PASS — `CURRENT_ID`, `ACTIVE_ID`, and app-level `PING` messages remain separated by WebSocket message boundaries and cannot corrupt a later `ok` token.
 
-PASS — each coordinated relative command is transmitted once, then waits for its real `ok`/`error`/alarm. Socket read timeout is waiting/backpressure, never completion.
+PASS — WebSocket protocol ping frames receive pong responses.
+
+PASS — each coordinated relative command is transmitted exactly once, then waits without a fixed deadline for its real `ok`/`error`/alarm.
+
+PASS — socket read timeout is waiting/backpressure only; it is never pattern completion.
+
+PASS — there is no 15-second abort in Direct pattern playback.
 
 PASS — an uncertain relative movement is never resent.
 
-PASS — there is no 15-second abort or acknowledgement deadline in the Direct pattern streamer.
+PASS — every parsed THR point must be acknowledged before the current file can complete.
 
-PASS — every parsed THR point must be acknowledged before that file may complete.
+PASS — after the final coordinate, the same connection queries FluidNC until an explicit `<Idle...>` frame is received; only then can playback finish.
 
-PASS — after the final coordinate, the same socket repeatedly queries FluidNC until an explicit `<Idle...>` frame is received; only then is the file complete.
+PASS — explicit user Stop sends FluidNC realtime Ctrl-X through the active WebSocket channel.
 
-## Clear direction
+PASS — TCP keepalive, TCP_NODELAY, high-performance Wi-Fi lock, and partial CPU wake lock remain active for Direct pattern playback.
 
-- `clear_from_in.thr`: 3449 points; rho is constrained Center → Perimeter.
-- `clear_from_out.thr`: 3447 points; rho is constrained Perimeter → Center.
-- Both use the same persistent streamer as normal THR playback.
-- UI `clear_from_out` maps to `clear_from_out.thr` (legacy `from_perimeter` also accepted).
-- UI `clear_from_in` maps to `clear_from_in.thr` (legacy `from_center` also accepted).
-- `clear_from_out.thr` is inserted before the selected drawing pattern, so From Perimeter cannot silently skip clearing and jump to the drawing pattern start.
-- Bundled THR files were not rewritten.
+## No-clear path
+
+PASS — `pre_execution = none` adds no clear file but always queues the selected pattern.
+
+PASS — the selected pattern then uses the same full-point acknowledgement streamer and the same final `<Idle>` completion gate.
+
+## Clear direction retained
+
+- `clear_from_in.thr`: 3449 points; rho constrained Center → Perimeter.
+- `clear_from_out.thr`: 3447 points; rho constrained Perimeter → Center.
+- UI `clear_from_out` / legacy `from_perimeter` maps to `clear_from_out.thr`.
+- UI `clear_from_in` / legacy `from_center` maps to `clear_from_in.thr`.
+- Both clear files use exactly the same Direct WebSocket streamer as normal drawing patterns.
 
 ## Included tests
 
@@ -59,23 +71,26 @@ GitHub Actions runs:
 
 - `tests/test_connection_state.js`
 - `tests/test_direct_coupled_motion.js`
-- `tests/test_direct_clear_progression.js`
 - `tests/test_direct_ack_framing.js`
+- `tests/test_direct_clear_progression.js`
 - `tests/test_direct_streamer_static.js`
 - `tests/test_direct_clear_mode_bridge.js`
+- `tests/test_direct_no_clear_stream.js`
 
 All tests pass in this source package.
 
-## Integrity checks
+## Source integrity
 
-PASS — locked compiled UI bundle, Pattern Designer, Pattern Forge, catalog, previews, and THR assets are unchanged. Only `offline/oryn-mobile-bootstrap.js` Direct clear-mode routing changed.
+PASS — `app/src/main/assets/` is byte-for-byte identical to the previous full-source build.
 
-PASS — offline catalog contains 100 patterns.
+PASS — offline catalog contains exactly 100 patterns.
 
-PASS — `LICENSE`, `NOTICE.md`, Gradle build configuration, settings, and properties are unchanged.
+PASS — Android manifest, app Gradle configuration, and existing license remain unchanged.
+
+PASS — Java parser-level syntax scan reports no syntax-like errors; local compilation cannot resolve Android framework classes because this execution environment does not contain the Android SDK. The included GitHub Actions workflow installs Android SDK 35 and performs the real Gradle APK build.
 
 ## APK workflow
 
-`.github/workflows/build-android-apk.yml` includes validation and a debug APK build using Java 17, Android SDK 35, Gradle 8.9, and AGP 8.7.3.
+`.github/workflows/build-android-apk.yml` installs Java 17, Android SDK 35, Gradle 8.9 and runs all Direct-motion validation tests before `:app:assembleDebug`.
 
-Artifact filename: `ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION_STREAMING_CLEAR_FIX-debug.apk`
+Artifact filename: `ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_DIRECT_WS_STREAM-debug.apk`

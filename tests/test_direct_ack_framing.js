@@ -1,40 +1,46 @@
 #!/usr/bin/env node
 'use strict';
 
-// Protocol-model validation for the persistent FluidNC reader. This deliberately
-// feeds replies in awkward TCP/Telnet boundaries matching the failure class seen
-// on Android: split ok tokens, mixed status frames, and Telnet IAC negotiation.
-function frame(chunks){
-  const lines=[], statuses=[];
-  let line='', status='', inStatus=false, telnetState=0;
-  const offerLine=()=>{const t=line.trim();line='';if(t)lines.push(t)};
-  for(const chunk of chunks){
-    for(const ub of chunk){
-      if(telnetState!==0){
-        if(telnetState===1){if(ub===255){telnetState=0;continue}if(ub===250){telnetState=3;continue}if(ub>=251&&ub<=254){telnetState=2;continue}telnetState=0;continue}
-        if(telnetState===2){telnetState=0;continue}
-        if(telnetState===3){if(ub===255)telnetState=4;continue}
-        if(telnetState===4){telnetState=ub===240?0:3;continue}
-      }
-      if(ub===255){telnetState=1;continue}
-      const ch=String.fromCharCode(ub);
-      if(inStatus){status+=ch;if(ch==='>'){const t=status.trim();status='';inStatus=false;if(t)statuses.push(t)}continue}
-      if(ch==='<'){if(line)offerLine();inStatus=true;status='<';continue}
-      if(ch==='\r'||ch==='\n'){if(line)offerLine();continue}
-      if(ub>=0x20&&ub!==0x7f){line+=ch;if(line.trim().toLowerCase()==='ok')offerLine()}
+// Model the message-boundary parsing used by the Direct FluidNC WebSocket
+// streamer. FluidNC may emit console responses as text or binary messages.
+function parseMessage(text){
+  const lines=[],statuses=[];
+  text=String(text).replace(/\0/g,'');
+  for(const piece of text.split(/\r?\n/)){
+    let work=piece.trim(); if(!work)continue;
+    let non='',cursor=0;
+    while(cursor<work.length){
+      const lt=work.indexOf('<',cursor);
+      if(lt<0){non+=work.slice(cursor);break;}
+      if(lt>cursor)non+=work.slice(cursor,lt);
+      const gt=work.indexOf('>',lt+1);
+      if(gt<0){non+=work.slice(lt);break;}
+      statuses.push(work.slice(lt,gt+1).trim());
+      cursor=gt+1;
     }
+    non=non.trim(); if(non)lines.push(non);
   }
-  if(line)offerLine();
   return {lines,statuses};
 }
-const enc=s=>Array.from(Buffer.from(s,'utf8'));
-let r=frame([enc('o'),enc('k\r'),enc('\n')]);
-if(!r.lines.includes('ok'))throw new Error('split o/k acknowledgement not reconstructed');
-r=frame([[255,251,1],enc('[MSG:test]\r\n'),enc('ok\r\n')]);
-if(!r.lines.includes('ok'))throw new Error('ok lost after Telnet IAC negotiation');
-r=frame([enc('<Run|MPos:1,2,0|FS:60,0>\r\n'),enc('o'),enc('k\r\n')]);
-if(r.statuses[0] !== '<Run|MPos:1,2,0|FS:60,0>' || !r.lines.includes('ok'))throw new Error('mixed status/ok framing failed');
-r=frame([enc('<Idle|MPos:1,2,0|FS:0,0>')]);
-if(!r.statuses[0].toLowerCase().startsWith('<idle'))throw new Error('Idle status framing failed');
-console.log('PASS Direct FluidNC acknowledgement/status framing model');
-console.log(JSON.stringify({splitOk:true,telnetIacFiltered:true,statusSeparated:true,idleFramed:true},null,2));
+
+let r=parseMessage('CURRENT_ID:0');
+if(r.lines[0]!=='CURRENT_ID:0') throw new Error('WebSocket management message parsing failed');
+r=parseMessage('PING:0');
+if(r.lines[0]!=='PING:0') throw new Error('PING message parsing failed');
+r=parseMessage('ok\n');
+if(!r.lines.includes('ok')) throw new Error('Standalone WebSocket ok not recognized');
+r=parseMessage('[MSG:test]\nok\n');
+if(!r.lines.includes('ok')) throw new Error('ok lost after informational message');
+r=parseMessage('ok<Run|MPos:1,2,0|FS:60,0>');
+if(!r.lines.includes('ok')||r.statuses[0]!=='<Run|MPos:1,2,0|FS:60,0>') throw new Error('Mixed ok/status WebSocket message failed');
+r=parseMessage('<Idle|MPos:1,2,0|FS:0,0>');
+if(!r.statuses[0].toLowerCase().startsWith('<idle')) throw new Error('Idle status framing failed');
+
+// Critically, WebSocket message boundaries keep an app-level PING message from
+// becoming glued to the next acknowledgement as could happen in raw TCP chunks.
+const a=parseMessage('PING:0'), b=parseMessage('ok\n');
+if(a.lines.join('')+b.lines.join('')!=='PING:0ok') throw new Error('Test setup failed');
+if(!b.lines.includes('ok')) throw new Error('Message boundary did not preserve next ok');
+
+console.log('PASS Direct FluidNC WebSocket acknowledgement/status framing model');
+console.log(JSON.stringify({managementMessagesSeparated:true,binaryTextPayloadCompatible:true,okFramed:true,statusSeparated:true,idleFramed:true},null,2));

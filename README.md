@@ -26,15 +26,20 @@ For the compact 28BYJ/Mini Direct profile, the measured physical coupling is fix
 
 This correction is important for clears such as `clear_from_out.thr`: the file contains about 33 spiral revolutions. On the compact coupled mechanism, sending only the logical rho value makes the ball linger near the perimeter and the pattern can fail mechanically after only a few turns. The coupled V9 compensation keeps physical Rho synchronized with the THR path.
 
+
+## Direct ESP32 continuous pattern transport
+
+Direct pattern playback uses one persistent FluidNC Grbl WebSocket channel on port **81**. Home, calibration and manual connection behavior remain on the existing working paths. During pattern playback, each coordinated relative X/Y block is sent once and the app waits for its real `ok`/`error` before sending the next THR point. Socket read gaps are treated only as waiting/backpressure. There is no fixed 15-second Direct playback abort, and completion waits for every point plus FluidNC `<Idle>`.
+
 ## Build APK with GitHub Actions
 
 Push this project to the `main` branch. The workflow `.github/workflows/build-android-apk.yml` builds with Android SDK 35, Java 17 and Gradle 8.9. Download the artifact named:
 
-`ORYN-V10.4.1-Unified-Final-Measured-Motion-APK`
+`ORYN-V10.4.1-Direct-WebSocket-Stream-APK`
 
 The APK filename inside the artifact is:
 
-`ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION-debug.apk`
+`ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_DIRECT_WS_STREAM-debug.apk`
 
 ## Upgrade from earlier Direct builds
 
@@ -53,6 +58,8 @@ node tests/test_connection_state.js
 node tests/test_direct_coupled_motion.js
 node tests/test_direct_clear_progression.js
 node tests/test_direct_streamer_static.js
+node tests/test_direct_ack_framing.js
+node tests/test_direct_no_clear_stream.js
 ```
 
 Expected result:

@@ -1,22 +1,39 @@
-ORYN Android V10.4.1 — Unified Final Measured Motion Streaming + Clear Fix Full Source
-Build marker: ORYN-ANDROID-V10.4.1-DIRECT-PERSISTENT-STREAM-CLEAR-20260901-3
+ORYN Android V10.4.1 — Unified Final Direct WebSocket Stream Full Source
+Build marker: ORYN-ANDROID-V10.4.1-DIRECT-WS-STREAM-20260901-4
 
 Base:
-- ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION_FULL_SOURCE
+- ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION_STREAMING_CLEAR_FIX_FULL_SOURCE
 
-Scope:
-- Full Android source package
-- Direct ESP32 / FluidNC pattern-motion streaming internals corrected only
-- Locked visual UI retained; Direct offline bridge clear-mode routing corrected only
-- Pi support retained
-- ESP32/Home Wi-Fi/hotspot/manual-IP connection behavior retained
-- Home and calibration behavior retained
-- 100 offline patterns retained
-- Pattern Designer and Pattern Forge retained
-- ORYN branding retained
-- Existing non-commercial license retained
+Locked functionality retained:
+- ESP32 FluidNC connection
+- Home Wi-Fi / phone hotspot connection
+- Manual IP connection
+- ORYN Direct — ESP32 FluidNC header
+- Home
+- Full Circle calibration
+- Perimeter calibration
+- Pi support
+- 100 offline patterns
+- Pattern Designer
+- Pattern Forge
+- UI / branding
+- Non-commercial license
 
-Measured Mini coupling:
+Direct ESP32 pattern-motion correction only:
+- one exclusive FluidNC WebSocket motion channel on port 81
+- machine/profile reads performed on the same pattern channel before motion
+- one coordinated relative G91 G21 G1 X/Y command per THR point
+- real ok/error acknowledgement required before next point
+- socket timeout = wait/backpressure, never completion
+- no fixed 15-second Direct playback abort
+- no resend of uncertain relative movement
+- all THR points acknowledged before completion
+- final completion waits for FluidNC <Idle>
+- clear_from_in and clear_from_out use the same streamer
+- no-clear playback uses the same streamer
+- explicit Stop sends realtime Ctrl-X on the active WebSocket channel
+
+Measured Mini coupling retained:
 - gear_ratio: 6.25
 - X_steps_per_mm: 256
 - Y_steps_per_mm: 210
@@ -29,27 +46,7 @@ Saved live calibration remains authoritative:
 - rhoTravelUnits from saved Perimeter calibration
 - rhoDirection from saved calibration/profile state
 
-Direct streaming correction:
-- one exclusive FluidNC Telnet motion socket
-- persistent framed response reader
-- Telnet IAC filtering
-- fragmented ok reconstruction
-- socket timeout = wait/backpressure, never completion
-- exactly-once relative command transmission
-- no fixed Direct acknowledgement abort
-- all THR points acknowledged before completion
-- final completion gated by explicit FluidNC <Idle>
-- TCP keepalive + TCP_NODELAY
-- Direct-pattern-only Wi-Fi/CPU runtime hold
-
 GitHub APK workflow:
 .github/workflows/build-android-apk.yml
 Artifact APK filename:
-ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION_STREAMING_CLEAR_FIX-debug.apk
-
-Direct clear-mode correction:
-- UI clear_from_out -> clear_from_out.thr (From Perimeter)
-- UI clear_from_in -> clear_from_in.thr (From Center)
-- legacy from_perimeter/from_center aliases retained
-- clear_from_out starts at rho=1 and progresses inward
-- clear_from_in starts at rho=0 and progresses outward
+ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_DIRECT_WS_STREAM-debug.apk
