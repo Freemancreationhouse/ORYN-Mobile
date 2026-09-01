@@ -1,4 +1,4 @@
-# ORYN Android V10.4.1 — Direct Background + Playlist Fix
+# ORYN Android V10.4.1 — Direct Final
 
 This repository contains the consolidated ORYN Android application. It opens as a complete offline ORYN app and can then connect either to an ORYN Raspberry Pi table or directly to an ESP32 running FluidNC.
 
@@ -28,7 +28,11 @@ The Direct player exposes native elapsed and estimated remaining seconds to the 
 
 While Direct Home or pattern playback is active, Android runs an ongoing connected-device foreground service and holds CPU/Wi-Fi locks. Switching apps or opening Pattern Forge's system file picker therefore does not destroy the active stream. Force Stop, phone shutdown, controller disconnect, a real FluidNC error/alarm, or the in-app Stop control still stops playback normally.
 
+If the ORYN Activity is recreated while that foreground playback is still active, the reopened UI reattaches to the same process-wide motion state and FluidNC socket. It shows the running pattern and does not reconnect or issue automatic Home over the existing motion.
+
 Generated patterns are stored in playlists using their canonical `custom/*.thr` path. Direct playlist playback resolves those entries to the native Android `user/*.thr` files before starting the same acknowledged streamer.
+
+Pattern Designer now recognizes `ORYN Direct — ESP32 FluidNC` as a valid native library target even though it is the current table. **Save to ORYN Library** writes through the Android bridge and returns the saved `custom/*.thr` entry for browsing and playlists.
 
 This correction is important for clears such as `clear_from_out.thr`: the file contains about 33 spiral revolutions. On the compact coupled mechanism, sending only the logical rho value makes the ball linger near the perimeter and the pattern can fail mechanically after only a few turns. The coupled V9 compensation keeps physical Rho synchronized with the THR path.
 
@@ -36,11 +40,11 @@ This correction is important for clears such as `clear_from_out.thr`: the file c
 
 Push this project to the `main` branch. The workflow `.github/workflows/build-android-apk.yml` builds with Android SDK 35, Java 17 and Gradle 8.9. Download the artifact named:
 
-`ORYN-V10.4.1-Direct-Background-Playlist-WiFi-Fix-APK`
+`ORYN-V10.4.1-Direct-Final-APK`
 
 The APK filename inside the artifact is:
 
-`ORYN-V10.4.1-direct-background-playlist-wifi-fix-debug.apk`
+`ORYN-V10.4.1-direct-final-debug.apk`
 
 ## Upgrade from earlier Direct builds
 
@@ -67,7 +71,7 @@ Expected result:
 PASS connection-state deterministic tests
 PASS direct coupled motion parity
 PASS Direct auto-home, timer, consecutive-session, Idle, and clear-direction validation
-PASS Android background playback and generated-pattern playlist validation
+PASS Android background playback, Activity reattach, Pattern Designer save, and playlist validation
 ```
 
 See `VALIDATION_REPORT.md` for the packaging-time checks and the explicit APK-build limitation.

@@ -86,7 +86,9 @@ public class MainActivity extends Activity {
     private final ExecutorService discoveryLauncher = Executors.newSingleThreadExecutor();
     private final ExecutorService directNetworkExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean discoveryRunning = new AtomicBoolean(false);
-    private final AtomicBoolean freshLaunchPending = new AtomicBoolean(true);
+    // Process-wide: reopening the Activity while the foreground playback
+    // service is alive is not a cold app launch and must not clear Direct mode.
+    private static final AtomicBoolean freshLaunchPending = new AtomicBoolean(true);
 
     // Smart Wi-Fi: ORYN requests a local-only FluidNC Wi-Fi network and
     // binds ONLY ESP32 sockets to it. The Android default network remains free
@@ -102,36 +104,38 @@ public class MainActivity extends Activity {
 
     // ORYN Direct (experimental): Android talks straight to FluidNC over Wi-Fi/Telnet.
     private final ExecutorService directExecutor = Executors.newSingleThreadExecutor();
-    private final AtomicBoolean directRunning = new AtomicBoolean(false);
-    private final AtomicBoolean directPaused = new AtomicBoolean(false);
-    private final AtomicBoolean directStopRequested = new AtomicBoolean(false);
-    private final AtomicBoolean directHoming = new AtomicBoolean(false);
-    private volatile boolean directControllerOnline = false;
-    private volatile Socket directPatternSocket;
-    private volatile String directLastError = "";
-    private volatile String directCurrentFile = null;
-    private volatile int directPoint = 0;
-    private volatile int directTotal = 0;
-    private volatile double directTheta = 0.0;
-    private volatile double directRho = 0.0;
-    private volatile double directSpeed = 60.0;
+    // Motion state belongs to the foreground process, not one Activity screen.
+    // A new MainActivity therefore reattaches to the same running session.
+    private static final AtomicBoolean directRunning = new AtomicBoolean(false);
+    private static final AtomicBoolean directPaused = new AtomicBoolean(false);
+    private static final AtomicBoolean directStopRequested = new AtomicBoolean(false);
+    private static final AtomicBoolean directHoming = new AtomicBoolean(false);
+    private static volatile boolean directControllerOnline = false;
+    private static volatile Socket directPatternSocket;
+    private static volatile String directLastError = "";
+    private static volatile String directCurrentFile = null;
+    private static volatile int directPoint = 0;
+    private static volatile int directTotal = 0;
+    private static volatile double directTheta = 0.0;
+    private static volatile double directRho = 0.0;
+    private static volatile double directSpeed = 60.0;
     // Live FluidNC/mechanism profile used by the coupled Theta-Rho motion core.
     // Values are detected from the controller at motion start; they are not
     // written back to FluidNC and therefore cannot disturb a working setup.
-    private volatile double directXStepsPerMm = 0.0;
-    private volatile double directYStepsPerMm = 0.0;
-    private volatile double directGearRatio = 0.0;
-    private volatile double directCouplingSign = 0.0;
-    private volatile String directMachineName = "";
+    private static volatile double directXStepsPerMm = 0.0;
+    private static volatile double directYStepsPerMm = 0.0;
+    private static volatile double directGearRatio = 0.0;
+    private static volatile double directCouplingSign = 0.0;
+    private static volatile String directMachineName = "";
     // Playback timing is native so the locked web player receives the same
     // elapsed/remaining fields as the Pi backend. Times are per current THR
     // file (a clear file and the selected pattern each get their own clock).
-    private volatile long directFileStartedAtMs = 0L;
-    private volatile long directPauseStartedAtMs = 0L;
-    private volatile long directPausedAccumulatedMs = 0L;
-    private volatile long directFileFinishedAtMs = 0L;
-    private volatile double directLastCompletedSeconds = 0.0;
-    private volatile long directLastSocketClosedAtMs = 0L;
+    private static volatile long directFileStartedAtMs = 0L;
+    private static volatile long directPauseStartedAtMs = 0L;
+    private static volatile long directPausedAccumulatedMs = 0L;
+    private static volatile long directFileFinishedAtMs = 0L;
+    private static volatile double directLastCompletedSeconds = 0.0;
+    private static volatile long directLastSocketClosedAtMs = 0L;
     private volatile boolean activityDestroyed = false;
 
     @Override public void onCreate(Bundle savedInstanceState) {
@@ -334,7 +338,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct-background-playlist-wifi-fix"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct-final"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {

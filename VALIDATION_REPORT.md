@@ -1,6 +1,6 @@
-# ORYN Android V10.4.1 — Direct Background + Playlist Fix Validation
+# ORYN Android V10.4.1 — Direct Final Validation
 
-Build: `ORYN-ANDROID-V10.4.1-DIRECT-BACKGROUND-PLAYLIST-WIFI-FIX-20260901-1`
+Build: `ORYN-ANDROID-V10.4.1-DIRECT-FINAL-20260901-1`
 
 ## Packaging-time checks
 
@@ -14,9 +14,13 @@ Build: `ORYN-ANDROID-V10.4.1-DIRECT-BACKGROUND-PLAYLIST-WIFI-FIX-20260901-1`
 - PASS — final completion waits for explicit FluidNC `<Idle>` before releasing the session.
 - PASS — completed/closed playback releases `directRunning` so a second pattern can start.
 - PASS — leaving the Activity cannot call Direct Stop while Home or pattern motion is active.
+- PASS — active motion, controller state, timer and socket survive Activity recreation in the foreground-service process.
+- PASS — reopening during active motion does not become a fresh launch, reconnect, or queue automatic Home.
 - PASS — foreground connected-device service holds CPU and high-performance Wi-Fi locks during motion.
 - PASS — the foreground service is non-sticky, so an uncertain relative movement is never restarted after process death.
 - PASS — generated/native pattern aliases normalize to one canonical `custom/*.thr` playlist entry.
+- PASS — Pattern Designer accepts the active Direct ESP32 table and routes Save to the native Android ORYN Library.
+- PASS — Direct Pattern Designer save invokes native storage and returns its canonical `custom/*.thr` path.
 - PASS — Direct playlist playback resolves generated patterns to their native `user/*.thr` files.
 - PASS — Wi-Fi setup scans with FluidNC `$WiFi/ListAPs` and shows ESP32-visible 2.4 GHz networks.
 - PASS — all four saved Wi-Fi settings require explicit FluidNC `ok` acknowledgements.

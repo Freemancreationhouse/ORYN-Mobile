@@ -535,8 +535,12 @@ function selectedORYNTarget(){
     const active=localStorage.getItem('orynmotion_active_table');
     const raw=JSON.parse(localStorage.getItem('orynmotion_tables')||'{}');
     const table=(raw.tables||[]).find(t=>t&&t.id===active);
-    if(!table||table.id==='oryn-mobile-offline'||table.isCurrent||!table.url||table.url===location.origin)return null;
-    return table;
+    if(!table||table.id==='oryn-mobile-offline')return null;
+    // ORYN Direct is intentionally the current/local table. Save through the
+    // Android native bridge instead of rejecting it as a non-remote target.
+    if(table.id==='oryn-direct-fluidnc'||table.directFluidNC)return {...table,directNative:true};
+    if(table.isCurrent||!table.url||table.url===location.origin)return null;
+    return {...table,directNative:false};
   }catch(_){return null;}
 }
 function syncLibraryTarget(){
@@ -557,7 +561,7 @@ async function saveToORYNLibrary(){
   if(!state.path.length){setSaveMessage('Generate a valid path first.','error');return;}
   const target=isORYNMobile?selectedORYNTarget():null;
   if(isORYNMobile&&!target){syncLibraryTarget();return;}
-  const endpoint=target?String(target.url).replace(/\/$/,'')+'/api/pattern-designer/save':'/api/pattern-designer/save';
+  const endpoint=target&&!target.directNative?String(target.url).replace(/\/$/,'')+'/api/pattern-designer/save':'/api/pattern-designer/save';
   saveLibraryBtn.disabled=true;setSaveMessage(`Saving generated THR${target?' to '+(target.name||'connected ORYN'):''}…`,'busy');
   try{
     const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,thr:toThr(state.path)})});

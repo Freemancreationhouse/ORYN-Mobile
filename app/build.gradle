@@ -8,8 +8,8 @@ android {
         applicationId 'com.studiokinematics.oryn'
         minSdk 26
         targetSdk 35
-        versionCode 1040411
-        versionName '10.4.1-direct-background-playlist-wifi-fix'
+        versionCode 1040412
+        versionName '10.4.1-direct-final'
     }
 
     buildTypes {
