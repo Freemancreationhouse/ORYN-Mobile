@@ -1,23 +1,37 @@
-ORYN Android V10.4.1 — Unified Connection
-Build marker: ORYN-ANDROID-V10.4.1-UNIFIED-CONNECTION-20260901-1
+ORYN Android V10.4.1 — Unified Final Measured Motion Full Source
+Build marker: ORYN-ANDROID-V10.4.1-UNIFIED-FINAL-MEASURED-MOTION-20260901-1
 
-Purpose:
-- Offline-first ORYN Android app
-- Raspberry Pi ORYN connection path
-- Direct ESP32 / FluidNC connection path
-- Smart Wi-Fi, current-network and phone-hotspot discovery support
-- Manual IP fallback
-- Direct Full-Circle and Perimeter calibration
-- Direct Theta-Rho playback and live status/preview bridge
-- Bundled offline pattern library, Pattern Designer and Pattern Forge
+Base:
+- Uploaded ORYN_ANDROID_V10_4_1_UNIFIED_MOTION_PARITY_FULL_SOURCE(1).zip
+
+Scope:
+- Full Android source package
+- Only Direct ESP32 / FluidNC pattern-motion internals corrected
+- Existing Offline and Raspberry Pi support retained
+- Existing Wi-Fi / hotspot / manual-IP paths retained
+- Existing Home and calibration surfaces retained
+- Existing 100 offline pattern catalog retained
+- Existing Pattern Designer and Pattern Forge retained
+- Existing ORYN UI/branding retained
+
+Measured Direct Mini coupling:
+- gear_ratio: 6.25
+- X_steps_per_mm: 256
+- Y_steps_per_mm: 210
+- coupling coefficient: 0.19504761904761905
+- X+ => Y- compensation
+
+Saved live calibration remains authoritative:
+- thetaRevUnits from saved Full Circle calibration
+- rhoTravelUnits from saved Perimeter calibration
+- rhoDirection from saved calibration/profile state
+
+GitHub APK workflow:
+.github/workflows/build-android-apk.yml
+Artifact APK filename:
+ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION-debug.apk
 
 License:
 - ORYN-owned portions: PolyForm Noncommercial License 1.0.0
 - Commercial use requires a separate written commercial license
 - Third-party components remain under their own licenses/terms
-
-GitHub build artifact:
-ORYN-V10.4.1-unified-connection-debug.apk
-
-Motion parity build: ORYN-ANDROID-V10.4.1-UNIFIED-MOTION-PARITY-20260901-1
-Direct playback: locked Pi V9 coupled Theta-Rho relative-delta formula

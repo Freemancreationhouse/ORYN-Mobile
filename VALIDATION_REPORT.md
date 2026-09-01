@@ -1,35 +1,84 @@
-# ORYN Android V10.4.1 — Unified Motion Parity Validation
+# ORYN Android V10.4.1 — Unified Final Measured Motion Validation
 
-Build: `ORYN-ANDROID-V10.4.1-UNIFIED-MOTION-PARITY-20260901-1`
+Build: `ORYN-ANDROID-V10.4.1-UNIFIED-FINAL-MEASURED-MOTION-20260901-1`
 
-## Packaging-time checks
+## Scope lock
 
-- PASS — bundled Android offline library retained.
-- PASS — JavaScript syntax (`oryn-mobile-bootstrap.js`).
-- PASS — deterministic Offline / Pi / Direct connection-state test.
-- PASS — Android manifest and resource XML parse.
-- PASS — Direct coupled-motion parity test using bundled `clear_from_out.thr`.
-- PASS — `clear_from_out.thr` verified as 3447 points / ~32.985 full revolutions.
-- PASS — Direct playback source sends coordinated relative `G91 G21 G1 XΔ YΔ` blocks.
-- PASS — Direct playback source contains the ORYN Pi V9 Theta→Rho coupling formula.
-- PASS — Center / Perimeter / manual Theta-Rho coordinate moves are routed through the same coupled logical-delta conversion.
-- PASS — GitHub Actions runs the deterministic connection + coupled-motion tests before APK compilation.
-- PASS — controller X/Y steps-per-mm are read at playback start; no controller setting is written by this detector.
-- PASS — PolyForm Noncommercial License 1.0.0 retained.
+Only the Android **Direct ESP32 / FluidNC pattern-motion path** was changed. The existing Offline/Pi paths, Wi-Fi and hotspot connection flow, manual IP, Home UI/action, Full Circle calibration, Perimeter calibration, 100-pattern library, Pattern Designer, Pattern Forge, branding/UI assets, and PolyForm Noncommercial license were retained from the uploaded base.
 
-## Motion correction verified
+## Measured Mini coupling
 
-The previous Direct Android streamer treated X/Theta and Y/Rho as independent absolute axes. The compact ORYN/Dune-Weaver-style mechanism is mechanically coupled, so that path cannot match the locked Pi V9 motion core.
+Confirmed Direct Mini constants used by the motion core:
 
-This build ports the V9 formula:
+- `gear_ratio = 6.25`
+- `X_steps_per_mm = 256`
+- `Y_steps_per_mm = 210`
+- `coupling = 256 / (6.25 × 210) = 0.19504761904761905`
+- X positive requires Y negative compensation.
+- X negative requires Y positive compensation.
 
-- `dX = dTheta / (2π) × savedThetaRevolutionUnits`
-- `dY_geometry = dRho × savedRhoTravelUnits × rhoDirection`
-- `dY_coupling = dX × (xSteps / (gearRatio × ySteps)) × sourceSign × rhoDirection`
-- `dY_motor = dY_geometry + dY_coupling`
+Static calculation:
 
-The test verifies that coupling is already materially active by about three turns of `clear_from_out.thr`, which is the physical failure point reported on the compact table.
+- `X +5.000000` → coupling Y = `-0.9752380952380952`
+- `X -5.000000` → coupling Y = `+0.9752380952380952`
 
-## APK compile note
+The Full Circle and Perimeter geometry values are **not hardcoded**. Playback continues to receive and use the saved live values passed as `thetaRevUnits`, `rhoTravelUnits`, and `rhoDirection`.
 
-The source package is configured for Android SDK 35 / Gradle 8.9 through GitHub Actions. This Linux workspace does not contain the complete Android SDK/Gradle build environment, so an APK binary was not claimed as locally compiled here. Push the source to GitHub and use the included workflow for the real APK build.
+## Direct THR conversion
+
+For each logical THR delta, the Android native streamer uses:
+
+- `dX = deltaTheta / (2π) × savedThetaRevolutionUnits`
+- `dY_radial = deltaRho × savedRhoTravelUnits × savedRhoDirection`
+- `dY_coupling = -dX × X_steps_per_mm / (6.25 × Y_steps_per_mm) × savedRhoDirection`
+- `dY = dY_radial + dY_coupling`
+
+and sends one coordinated relative command:
+
+`G91 G21 G1 X... Y... F...`
+
+## Streaming validation
+
+PASS — one persistent Direct FluidNC motion socket is used for the clear + pattern sequence.
+
+PASS — every relative THR command is sent exactly once and then waits for its real FluidNC `ok` or `error`/`ALARM` result.
+
+PASS — socket read timeout is treated as waiting/back-pressure, not completion.
+
+PASS — the Direct pattern streamer contains no 15-second acknowledgement abort and no acknowledgement deadline.
+
+PASS — an uncertain relative movement is never resent.
+
+PASS — every parsed THR coordinate must be acknowledged before the file can complete.
+
+PASS — after the final coordinate, ORYN repeatedly queries FluidNC until an explicit `<Idle...>` status is received.
+
+PASS — only after `<Idle>` does the sequence restore `G90` and leave the running state.
+
+## Clear validation
+
+Both clear patterns are sent through the exact same `runDirectPattern` streamer as normal THR patterns.
+
+- `clear_from_in.thr`: 3449 points; first rho = `0`; final rho = `1`. The first point establishes Center, then Direct playback prevents tiny rounding reversals so rho progresses Center → Perimeter.
+- `clear_from_out.thr`: 3447 points; first rho = `1`; final rho = `0.001`. The first point establishes Perimeter, then Direct playback prevents tiny rounding reversals so rho progresses Perimeter → Center.
+
+No bundled THR file was rewritten.
+
+## Automated checks included
+
+GitHub Actions runs these before APK compilation:
+
+- `tests/test_connection_state.js`
+- `tests/test_direct_coupled_motion.js`
+- `tests/test_direct_clear_progression.js`
+- `tests/test_direct_streamer_static.js`
+
+All four checks pass in this source package.
+
+## Build workflow
+
+`.github/workflows/build-android-apk.yml` builds with Java 17, Android SDK 35, Gradle 8.9, and Android Gradle Plugin 8.7.3, then uploads:
+
+`ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION-debug.apk`
+
+The current workspace does not include a local Android SDK/Gradle installation, so no local APK binary is claimed here; the complete GitHub Actions APK workflow is included and statically validated.

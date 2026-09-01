@@ -76,6 +76,12 @@ public class MainActivity extends Activity {
     private static final int FILE_CHOOSER_REQUEST = 7001;
     private static final int SAVE_FILE_REQUEST = 7002;
     private static final int WIFI_PERMISSION_REQUEST = 7003;
+    // Measured ORYN Mini mechanical coupling constants. Saved user calibration
+    // values (Full Circle and Perimeter) remain live runtime inputs.
+    private static final double MINI_X_STEPS_PER_MM = 256.0;
+    private static final double MINI_Y_STEPS_PER_MM = 210.0;
+    private static final double MINI_GEAR_RATIO = 6.25;
+    private static final double MINI_COUPLING_SIGN = -1.0;
     private WebView webView;
     private FrameLayout rootView;
     private ValueCallback<Uri[]> fileChooserCallback;
@@ -1012,19 +1018,22 @@ public class MainActivity extends Activity {
         k.yStepsPerMm = extractFluidNcSetting(response, "y", "steps_per_mm");
 
         String machine = k.machineName == null ? "" : k.machineName.toLowerCase(java.util.Locale.US);
-        // The user's compact 28BYJ / Dune-Weaver-style mechanism is the coupled
-        // Mini winding. Its proven source geometry uses gear ratio 32 and the
-        // negative coupling winding. For other ORYN profiles keep the V9 source
-        // fallback (ratio 10, positive winding) unless a future profile overrides it.
+        // ORYN Mini / 28BYJ-48 measured physical coupling (confirmed on the
+        // actual table): X+ requires Y- compensation and X- requires Y+.
+        // These are mechanical/controller scale constants, NOT the user's saved
+        // Full Circle or Perimeter calibration values. Those live values are
+        // still supplied separately as thetaRevUnits / rhoTravelUnits.
         boolean miniByj = machine.contains("28byj") || machine.contains("mini");
-        k.gearRatio = miniByj ? 32.0 : 10.0;
-        k.sourceSign = miniByj ? -1.0 : 1.0;
-
-        // Do not overwrite controller settings. Fallbacks are used only if the
-        // readback was unavailable. The normal path uses the controller's actual
-        // current X/Y steps-per-mm, so 180 vs 210 is handled automatically.
-        if (!(k.xStepsPerMm > 0.0)) k.xStepsPerMm = miniByj ? 256.0 : 0.0;
-        if (!(k.yStepsPerMm > 0.0)) k.yStepsPerMm = miniByj ? 180.0 : 0.0;
+        if (miniByj) {
+            k.xStepsPerMm = MINI_X_STEPS_PER_MM;
+            k.yStepsPerMm = MINI_Y_STEPS_PER_MM;
+            k.gearRatio = MINI_GEAR_RATIO;
+            k.sourceSign = MINI_COUPLING_SIGN;
+        } else {
+            // Preserve the existing non-Mini V9 behavior.
+            k.gearRatio = 10.0;
+            k.sourceSign = 1.0;
+        }
 
         directXStepsPerMm = k.xStepsPerMm;
         directYStepsPerMm = k.yStepsPerMm;
@@ -1062,6 +1071,30 @@ public class MainActivity extends Activity {
     private double directCouplingOffset(double xIncrement, double rhoDirection, DirectKinematicsProfile k) {
         if (k == null || !(k.xStepsPerMm > 0.0) || !(k.yStepsPerMm > 0.0) || !(k.gearRatio > 0.0)) return 0.0;
         return xIncrement * (k.xStepsPerMm / (k.gearRatio * k.yStepsPerMm)) * k.sourceSign * rhoDirection;
+    }
+
+    private boolean isDirectClearFromIn(String displayName) {
+        if (displayName == null) return false;
+        String n = new File(displayName).getName().toLowerCase(java.util.Locale.US);
+        return n.equals("clear_from_in.thr");
+    }
+
+    private boolean isDirectClearFromOut(String displayName) {
+        if (displayName == null) return false;
+        String n = new File(displayName).getName().toLowerCase(java.util.Locale.US);
+        return n.equals("clear_from_out.thr");
+    }
+
+    private double directClearRhoTarget(double requestedRho, double previousRho,
+                                        boolean clearFromIn, boolean clearFromOut,
+                                        boolean firstPoint) {
+        double r = Math.max(0.0, Math.min(1.0, requestedRho));
+        // The first THR coordinate is the required clear entry position:
+        // clear_from_in starts at Center; clear_from_out starts at Perimeter.
+        if (firstPoint) return r;
+        if (clearFromIn) return Math.max(previousRho, r);
+        if (clearFromOut) return Math.min(previousRho, r);
+        return r;
     }
 
     private double planDirectFeed(double dx, double dy, double requestedFeed) {
@@ -1112,16 +1145,20 @@ public class MainActivity extends Activity {
             String h = normalizeDirectHost(host);
             DirectKinematicsProfile kin = detectDirectKinematics(h);
 
+            // One exclusive Telnet motion session owns FluidNC for the complete
+            // clear + pattern sequence. No polling/probe socket is opened while
+            // directRunning/directHoming is active.
             sock = createDirectSocketForHost(h); directPatternSocket = sock;
             sock.connect(new InetSocketAddress(h, 23), 2500);
-            // Planner acknowledgements may be delayed while the FluidNC buffer is
-            // full. Keep a short read heartbeat but allow long planner backpressure.
+            sock.setKeepAlive(true);
+            // A short SO_TIMEOUT is only a read heartbeat. Socket timeout means
+            // planner back-pressure / still waiting; it is NEVER completion.
             sock.setSoTimeout(2000);
             directControllerOnline = true;
             OutputStream out = sock.getOutputStream(); InputStream in = sock.getInputStream();
             try { Thread.sleep(100); while (in.available() > 0) in.read(); } catch (Exception ignored) {}
-            sendAndWaitOk(out, in, "$X");
-            sendAndWaitOk(out, in, "G21");
+            sendDirectPatternAndWaitOk(out, in, "$X");
+            sendDirectPatternAndWaitOk(out, in, "G21");
 
             for (int pi=0; pi<paths.length() && !directStopRequested.get(); pi++) {
                 Object item = paths.opt(pi);
@@ -1166,20 +1203,24 @@ public class MainActivity extends Activity {
                     thetaOffset = turns * Math.PI * 2.0;
                 }
 
+                final boolean clearFromIn = isDirectClearFromIn(displayName);
+                final boolean clearFromOut = isDirectClearFromOut(displayName);
+                int acknowledgedPoints = 0;
                 int pointIndex = 0;
                 for (double[] pt : pts) {
                     if (directStopRequested.get()) break;
                     while (directPaused.get() && !directStopRequested.get()) Thread.sleep(80);
+                    if (directStopRequested.get()) break;
 
                     double targetTheta = pt[0] + thetaOffset;
-                    double targetRho = pt[1];
+                    double targetRho = directClearRhoTarget(pt[1], directRho, clearFromIn, clearFromOut, pointIndex == 0);
                     double deltaTheta = targetTheta - directTheta;
                     double deltaRho = targetRho - directRho;
 
-                    // EXACT ORYN V9 / Dune-Weaver coupled Theta-Rho mathematics:
-                    // X is the logical theta delta scaled by the saved 360-degree
-                    // calibration. Y contains BOTH the logical rho delta and the
-                    // mechanical coupling compensation caused by theta rotation.
+                    // Measured ORYN Mini Theta/Rho conversion. Saved live Full
+                    // Circle and Perimeter calibrations remain the only geometry
+                    // scale inputs. Coupling is based on the measured mechanism:
+                    // dYcoupling = -dX * 256 / (6.25 * 210) * rhoDirection.
                     double xIncrement = (deltaTheta / (Math.PI * 2.0)) * thetaRevUnits;
                     double yGeometryIncrement = deltaRho * rhoTravelUnits * rhoDirection;
                     double couplingOffset = directCouplingOffset(xIncrement, rhoDirection, kin);
@@ -1192,25 +1233,37 @@ public class MainActivity extends Activity {
                     String g = String.format(java.util.Locale.US,
                             "G91 G21 G1 X%.6f Y%.6f F%.3f",
                             xIncrement, yIncrement, plannedFeed);
-                    sendAndWaitOk(out, in, g);
+
+                    // Exactly-once relative motion: transmit once, then wait for
+                    // that command's real ok/error. A read timeout only continues
+                    // waiting; this command is NEVER resent after uncertainty.
+                    sendDirectPatternAndWaitOk(out, in, g);
 
                     directTheta = targetTheta;
                     directRho = targetRho;
                     directPoint++;
+                    acknowledgedPoints++;
 
-                    // The first point is the physical entry position. For
-                    // clear_from_out this is the perimeter. Match the Pi V9 core:
-                    // wait for that entry move before preview/progress continues.
+                    // The first point is the physical entry position. Match the
+                    // existing ORYN behavior but use the same no-abort Idle wait.
                     if (pointIndex == 0 && !directStopRequested.get())
-                        waitForDirectIdle(out, in, 120000L);
+                        waitForDirectIdle(out, in);
                     pointIndex++;
                 }
 
-                if (!directStopRequested.get()) waitForDirectIdle(out, in, 300000L);
+                if (!directStopRequested.get()) {
+                    // Completion is impossible until every parsed THR coordinate
+                    // in this file has received its FluidNC acknowledgement.
+                    if (acknowledgedPoints != pts.size())
+                        throw new java.io.IOException("Direct streamer ended before all THR points were acknowledged");
+                    // After the final coordinate, keep querying FluidNC until it
+                    // explicitly reports <Idle>. Only then may this file complete.
+                    waitForDirectIdle(out, in);
+                }
             }
 
-            // Leave FluidNC in a predictable absolute mode for manual terminal use.
-            if (!directStopRequested.get()) sendAndWaitOk(out, in, "G90", 15000L);
+            // Restore absolute mode only AFTER all THR files and final Idle.
+            if (!directStopRequested.get()) sendDirectPatternAndWaitOk(out, in, "G90");
         } catch (Exception e) {
             String detail = e.getMessage() == null ? e.toString() : e.getMessage();
             String file = directCurrentFile == null ? "pattern" : directCurrentFile;
@@ -1223,18 +1276,22 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void waitForDirectIdle(OutputStream out, InputStream in, long timeoutMs) throws Exception {
-        long deadline = System.currentTimeMillis() + Math.max(5000L, timeoutMs);
-        while (System.currentTimeMillis() < deadline) {
+    private void waitForDirectIdle(OutputStream out, InputStream in) throws Exception {
+        while (true) {
             if (directStopRequested.get()) throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
             out.write('?'); out.flush();
             String status = readStatusFrame(in, 1200);
-            if (status != null && status.contains("<Idle")) return;
+            String z = status == null ? "" : status.toLowerCase(java.util.Locale.US);
+            if (z.contains("<idle")) return;
+            if (containsFluidNcAlarm(z) || z.contains("error:"))
+                throw new java.io.IOException(status.trim().isEmpty() ? "FluidNC reported an error" : status.trim());
+            // Empty status / socket timeout is waiting/back-pressure, not completion.
             Thread.sleep(100);
         }
-        throw new java.io.IOException("Timed out waiting for FluidNC planner to become Idle");
     }
 
+    // Existing non-pattern command sender retained for Home/calibration/manual
+    // actions. Direct pattern playback uses the separate no-abort streamer below.
     private void sendAndWaitOk(OutputStream out, InputStream in, String line) throws Exception {
         sendAndWaitOk(out, in, line, 180000L);
     }
@@ -1254,11 +1311,36 @@ public class MainActivity extends Activity {
                 if (z.contains("error:")) throw new java.io.IOException(sb.toString().trim());
                 if (containsFluidNcOk(z)) return;
             } catch (java.net.SocketTimeoutException timeout) {
-                // This is normally planner back-pressure, not a lost controller.
-                // Keep waiting while still allowing Stop to interrupt promptly.
+                // Preserve existing non-pattern behavior.
             }
         }
         throw new java.io.IOException("FluidNC acknowledgement timed out while motion planner was busy: " + line);
+    }
+
+    private void sendDirectPatternAndWaitOk(OutputStream out, InputStream in, String line) throws Exception {
+        out.write((line + "\n").getBytes(StandardCharsets.UTF_8)); out.flush();
+        StringBuilder sb = new StringBuilder();
+        byte[] b = new byte[512];
+        while (true) {
+            if (directStopRequested.get()) throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
+            try {
+                int n = in.read(b);
+                if (n < 0) throw new java.io.EOFException("FluidNC connection closed");
+                sb.append(new String(b, 0, n, StandardCharsets.UTF_8));
+                String z = sb.toString().toLowerCase(java.util.Locale.US);
+                if (containsFluidNcAlarm(z) || z.contains("error:"))
+                    throw new java.io.IOException(sb.toString().trim());
+                if (containsFluidNcOk(z)) return;
+            } catch (java.net.SocketTimeoutException timeout) {
+                // Critical Direct streaming rule: timeout means continue waiting.
+                // Never treat it as completion and never resend this relative move.
+            }
+        }
+    }
+
+    private boolean containsFluidNcAlarm(String z) {
+        if (z == null || z.isEmpty()) return false;
+        return z.startsWith("alarm:") || z.contains("\nalarm:") || z.contains("\ralarm:");
     }
 
     private boolean containsFluidNcOk(String z) {
