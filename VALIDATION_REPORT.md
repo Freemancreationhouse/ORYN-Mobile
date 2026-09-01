@@ -1,6 +1,6 @@
-# ORYN Android V10.4.1 — Direct Playback State Fix Validation
+# ORYN Android V10.4.1 — Direct Background + Playlist Fix Validation
 
-Build: `ORYN-ANDROID-V10.4.1-DIRECT-PLAYBACK-STATE-FIX-20260901-1`
+Build: `ORYN-ANDROID-V10.4.1-DIRECT-BACKGROUND-PLAYLIST-FIX-20260901-1`
 
 ## Packaging-time checks
 
@@ -13,12 +13,17 @@ Build: `ORYN-ANDROID-V10.4.1-DIRECT-PLAYBACK-STATE-FIX-20260901-1`
 - PASS — each coordinated relative movement is sent once and progress advances only after its acknowledgement.
 - PASS — final completion waits for explicit FluidNC `<Idle>` before releasing the session.
 - PASS — completed/closed playback releases `directRunning` so a second pattern can start.
+- PASS — leaving the Activity cannot call Direct Stop while Home or pattern motion is active.
+- PASS — foreground connected-device service holds CPU and high-performance Wi-Fi locks during motion.
+- PASS — the foreground service is non-sticky, so an uncertain relative movement is never restarted after process death.
+- PASS — generated/native pattern aliases normalize to one canonical `custom/*.thr` playlist entry.
+- PASS — Direct playlist playback resolves generated patterns to their native `user/*.thr` files.
 - PASS — X5 measured coupling compensation is approximately Y−0.975238 for X=256, Y=210, gear ratio=6.25.
 - PASS — `clear_from_in` runs Center → Perimeter.
 - PASS — `clear_from_out` runs Perimeter → Center.
 - PASS — saved Full Circle, Perimeter and Rho-direction calibration values remain runtime inputs.
 - PASS — the 100-pattern offline assets, Pattern Designer, Pattern Forge, Pi support, branding and license remain present.
-- PASS — GitHub Actions runs all three deterministic validations before compiling the APK.
+- PASS — GitHub Actions runs all four deterministic validations before compiling the APK.
 
 ## APK compile note
 

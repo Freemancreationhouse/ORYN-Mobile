@@ -1,5 +1,5 @@
-ORYN Android V10.4.1 — Direct Playback State Fix
-Build marker: ORYN-ANDROID-V10.4.1-DIRECT-PLAYBACK-STATE-FIX-20260901-1
+ORYN Android V10.4.1 — Direct Background + Playlist Fix
+Build marker: ORYN-ANDROID-V10.4.1-DIRECT-BACKGROUND-PLAYLIST-FIX-20260901-1
 
 Purpose:
 - Offline-first ORYN Android app
@@ -12,6 +12,8 @@ Purpose:
 - Automatic Home after successful Direct ESP32 connection
 - Live elapsed and remaining time in the existing player UI
 - Reliable first, second and later pattern session handoff
+- Foreground playback when the app is backgrounded or the Android file picker opens
+- Generated-pattern playlist persistence and Direct playlist playback
 - Bundled offline pattern library, Pattern Designer and Pattern Forge
 
 License:
@@ -20,7 +22,7 @@ License:
 - Third-party components remain under their own licenses/terms
 
 GitHub build artifact:
-ORYN-V10.4.1-direct-playback-state-fix-debug.apk
+ORYN-V10.4.1-direct-background-playlist-fix-debug.apk
 
 Direct playback: one exclusive framed FluidNC session through final Idle
 Measured Mini coupling: 256 / (6.25 × 210), negative X-to-Y compensation

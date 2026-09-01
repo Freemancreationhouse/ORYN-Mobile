@@ -1,4 +1,4 @@
-# ORYN Android V10.4.1 — Direct Playback State Fix
+# ORYN Android V10.4.1 — Direct Background + Playlist Fix
 
 This repository contains the consolidated ORYN Android application. It opens as a complete offline ORYN app and can then connect either to an ORYN Raspberry Pi table or directly to an ESP32 running FluidNC.
 
@@ -26,17 +26,21 @@ At the start of each motion session ORYN reads the controller's current X/Y `ste
 
 The Direct player exposes native elapsed and estimated remaining seconds to the existing ORYN player UI. Playback keeps one persistent FluidNC session, treats read timeouts as waiting/backpressure, acknowledges every THR coordinate once, waits for final `<Idle>`, closes the session cleanly, and then permits the next pattern to start.
 
+While Direct Home or pattern playback is active, Android runs an ongoing connected-device foreground service and holds CPU/Wi-Fi locks. Switching apps or opening Pattern Forge's system file picker therefore does not destroy the active stream. Force Stop, phone shutdown, controller disconnect, a real FluidNC error/alarm, or the in-app Stop control still stops playback normally.
+
+Generated patterns are stored in playlists using their canonical `custom/*.thr` path. Direct playlist playback resolves those entries to the native Android `user/*.thr` files before starting the same acknowledged streamer.
+
 This correction is important for clears such as `clear_from_out.thr`: the file contains about 33 spiral revolutions. On the compact coupled mechanism, sending only the logical rho value makes the ball linger near the perimeter and the pattern can fail mechanically after only a few turns. The coupled V9 compensation keeps physical Rho synchronized with the THR path.
 
 ## Build APK with GitHub Actions
 
 Push this project to the `main` branch. The workflow `.github/workflows/build-android-apk.yml` builds with Android SDK 35, Java 17 and Gradle 8.9. Download the artifact named:
 
-`ORYN-V10.4.1-Direct-Playback-State-Fix-APK`
+`ORYN-V10.4.1-Direct-Background-Playlist-Fix-APK`
 
 The APK filename inside the artifact is:
 
-`ORYN-V10.4.1-direct-playback-state-fix-debug.apk`
+`ORYN-V10.4.1-direct-background-playlist-fix-debug.apk`
 
 ## Upgrade from earlier Direct builds
 
@@ -54,6 +58,7 @@ If Node.js is installed, run:
 node tests/test_connection_state.js
 node tests/test_direct_coupled_motion.js
 node tests/test_direct_playback_state.js
+node tests/test_background_playlist.js
 ```
 
 Expected result:
@@ -62,6 +67,7 @@ Expected result:
 PASS connection-state deterministic tests
 PASS direct coupled motion parity
 PASS Direct auto-home, timer, consecutive-session, Idle, and clear-direction validation
+PASS Android background playback and generated-pattern playlist validation
 ```
 
 See `VALIDATION_REPORT.md` for the packaging-time checks and the explicit APK-build limitation.

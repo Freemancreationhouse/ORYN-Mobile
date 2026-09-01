@@ -132,6 +132,7 @@ public class MainActivity extends Activity {
     private volatile long directFileFinishedAtMs = 0L;
     private volatile double directLastCompletedSeconds = 0.0;
     private volatile long directLastSocketClosedAtMs = 0L;
+    private volatile boolean activityDestroyed = false;
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -270,13 +271,27 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        activityDestroyed = true;
+        // Android may destroy the screen after the user switches apps or while
+        // Pattern Forge has the system picker open. Never turn that lifecycle
+        // event into a FluidNC Stop. The foreground playback service keeps this
+        // already-started acknowledged stream alive until completion.
+        if (!directRunning.get() && !directHoming.get()) cleanupDetachedActivity();
+        if (webView != null) { webView.destroy(); webView = null; }
+        super.onDestroy();
+    }
+
+    private void cleanupDetachedActivity() {
         discoveryLauncher.shutdownNow();
         directNetworkExecutor.shutdownNow();
         releaseDirectWifiNetwork();
-        directStop();
-        directExecutor.shutdownNow();
-        if (webView != null) { webView.destroy(); webView = null; }
-        super.onDestroy();
+        directExecutor.shutdown();
+        OrynPlaybackService.stop(getApplicationContext());
+    }
+
+    private void finishDirectForegroundMotion() {
+        OrynPlaybackService.stop(getApplicationContext());
+        if (activityDestroyed) cleanupDetachedActivity();
     }
 
     private class LocalAssetClient extends WebViewClient {
@@ -319,7 +334,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct-playback-state-fix"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct-background-playlist-fix"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
@@ -390,6 +405,8 @@ public class MainActivity extends Activity {
             if (directRunning.get()) { directLastError = "A pattern is running"; return false; }
             if (!directHoming.compareAndSet(false, true)) return directHoming.get();
             directStopRequested.set(false); directPaused.set(false); directLastError = ""; directSpeed = feed;
+            try { OrynPlaybackService.start(getApplicationContext(), "Homing the ORYN table"); }
+            catch (Exception e) { directLastError = "Android background service could not start: " + e.getMessage(); }
             directExecutor.submit(() -> runDirectHome(host, rhoTravelUnits, rhoDirection, feed));
             return true;
         }
@@ -397,6 +414,8 @@ public class MainActivity extends Activity {
         @JavascriptInterface public boolean directStartPattern(String host, String assetPathsJson, double thetaRevUnits, double rhoTravelUnits, double rhoDirection, double feed) {
             if (directHoming.get() || !directRunning.compareAndSet(false, true)) return false;
             directStopRequested.set(false); directPaused.set(false); directLastError = ""; directSpeed = feed;
+            try { OrynPlaybackService.start(getApplicationContext(), "Direct ESP32 pattern in progress"); }
+            catch (Exception e) { directLastError = "Android background service could not start: " + e.getMessage(); }
             directExecutor.submit(() -> runDirectPattern(host, assetPathsJson, thetaRevUnits, rhoTravelUnits, rhoDirection, feed));
             return true;
         }
@@ -1014,6 +1033,7 @@ public class MainActivity extends Activity {
             directLastSocketClosedAtMs = System.currentTimeMillis();
             if (directPatternSocket == sock) directPatternSocket = null;
             directHoming.set(false); directStopRequested.set(false);
+            finishDirectForegroundMotion();
         }
     }
 
@@ -1381,6 +1401,7 @@ public class MainActivity extends Activity {
                 directPauseStartedAtMs = 0L;
             }
             directRunning.set(false); directPaused.set(false); directStopRequested.set(false); directCurrentFile = null;
+            finishDirectForegroundMotion();
         }
     }
 

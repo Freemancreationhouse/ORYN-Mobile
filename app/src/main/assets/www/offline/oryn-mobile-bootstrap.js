@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const BUILD='ORYN-ANDROID-V10.4.1-DIRECT-PLAYBACK-STATE-FIX-20260901-1';
+const BUILD='ORYN-ANDROID-V10.4.1-DIRECT-BACKGROUND-PLAYLIST-FIX-20260901-1';
 const OFFLINE_ID='oryn-mobile-offline';
 const DIRECT_ID='oryn-direct-fluidnc';
 const DIRECT_AUTO_HOME_PENDING='oryn_direct_auto_home_pending_v1';
@@ -85,6 +85,25 @@ function getLocalSettings(){try{return deepMerge(defaultSettings,JSON.parse(loca
 function saveLocalSettings(patch){const merged=deepMerge(getLocalSettings(),patch||{});localStorage.setItem('oryn_mobile_settings',JSON.stringify(merged));return merged;}
 function playlists(){try{return JSON.parse(localStorage.getItem('oryn_mobile_playlists')||'{}');}catch(_){return {};}}
 function savePlaylists(p){localStorage.setItem('oryn_mobile_playlists',JSON.stringify(p));}
+function playlistRequestName(b){return String((b&&(b.playlist_name||b.playlist||b.name))||'').trim();}
+function canonicalPatternPath(value){
+ const raw=String(value||'').trim();if(!raw)return '';
+ const base=raw.split('/').pop();
+ const match=allPatternCatalog().find(x=>x&&(x.path===raw||x.native_path===raw||x.name===raw||x.path===base||x.native_path===base||x.path.split('/').pop()===base));
+ return match?match.path:raw;
+}
+function normalizedPlaylistFiles(values){
+ const input=Array.isArray(values)?values:[];const seen=new Set(),out=[];
+ for(const value of input){const path=canonicalPatternPath(value);if(path&&!seen.has(path)){seen.add(path);out.push(path);}}
+ return out;
+}
+function updateLocalPlaylist(body,replace){
+ const name=playlistRequestName(body);if(!name)return {success:false,detail:'Playlist name is required.'};
+ const ps=playlists();let files=normalizedPlaylistFiles(ps[name]||[]);
+ if(replace)files=normalizedPlaylistFiles((body&&((body.files||body.patterns||body.items)))||[]);
+ else {const path=canonicalPatternPath(body&&(body.pattern||body.file_name||body.path||body.pattern_name));if(path&&!files.includes(path))files.push(path);}
+ ps[name]=files;savePlaylists(ps);return {success:true,name,files};
+}
 function localKnownTables(){try{const d=JSON.parse(localStorage.getItem('orynmotion_tables')||'{}'),active=localStorage.getItem('orynmotion_active_table');const out=(d.tables||[]).filter(t=>t&&t.id!==OFFLINE_ID&&t.id!==DIRECT_ID&&!t.isCurrent&&t.url&&new URL(t.url,location.origin).origin!==location.origin).map(t=>({id:t.id,name:t.name,url:t.url,host:t.host,port:t.port,version:t.version}));if(active===DIRECT_ID&&directConfig())out.unshift({id:OFFLINE_ID,name:'ORYN Offline',url:location.origin,host:'app.oryn',version:BUILD});return out;}catch(_){return [];}}
 async function parseThr(path){const p=patternEntry(path);if(!p)return [];let txt='';if(p.native_path){try{txt=window.OrynAndroid.directReadPattern(path)||'';}catch(_){txt='';}}else{const r=await nativeFetch(p.thr_url);if(!r.ok)return [];txt=await r.text();}return parseThrText(txt);}
 
@@ -276,8 +295,8 @@ async function directFetch(u,init={}){
  if(p==='/api/pattern_history_all')return jsonResponse({});if(p.startsWith('/api/pattern_history/'))return jsonResponse({actual_time_formatted:null,speed:null});
  if(p==='/list_all_playlists')return jsonResponse(Object.keys(playlists()));
  if(p==='/get_playlist'){const n=u.searchParams.get('name')||'';const ps=playlists();return jsonResponse({name:n,files:ps[n]||[]});}
- if(['/create_playlist','/modify_playlist'].includes(p)&&m==='POST'){const ps=playlists();ps[b.playlist_name]=Array.isArray(b.files)?b.files:[];savePlaylists(ps);return jsonResponse({success:true});}
- if(p==='/add_to_playlist'&&m==='POST'){const ps=playlists(),arr=ps[b.playlist_name]||[];if(b.pattern&&!arr.includes(b.pattern))arr.push(b.pattern);ps[b.playlist_name]=arr;savePlaylists(ps);return jsonResponse({success:true});}
+ if(['/create_playlist','/modify_playlist'].includes(p)&&m==='POST'){const result=updateLocalPlaylist(b,true);return result.success?jsonResponse(result):errResponse(result.detail,400);}
+ if(p==='/add_to_playlist'&&m==='POST'){const result=updateLocalPlaylist(b,false);return result.success?jsonResponse(result):errResponse(result.detail,400);}
  if(p==='/serial_status')return jsonResponse({connected:true,port:'Wi‑Fi → '+cfg.host,firmware:'FluidNC'});if(p==='/list_serial_ports')return jsonResponse(['Wi‑Fi → '+cfg.host]);
  if(p==='/connect'){const q=directBridgeJson('directProbe',cfg.host);if(q&&q.ok){localStorage.setItem('oryn_direct_enabled','1');try{const x=JSON.parse(localStorage.getItem('oryn_direct_last')||'{}');if(q.host)x.host=q.host;localStorage.setItem('oryn_direct_last',JSON.stringify(x));sessionStorage.setItem(DIRECT_AUTO_HOME_PENDING,String(q.host||cfg.host));}catch(_){}runPendingDirectAutoHome({...cfg,host:String(q.host||cfg.host)});return jsonResponse({success:true,message:'Direct FluidNC connected'});}return errResponse((q&&q.error)||'FluidNC did not respond.',503);}if(p==='/disconnect')return jsonResponse({success:true});
  if(p==='/api/rotation-calibration'&&m==='GET'){
@@ -349,6 +368,25 @@ async function directFetch(u,init={}){
   const started=window.OrynAndroid&&window.OrynAndroid.directStartPattern&&window.OrynAndroid.directStartPattern(cfg.host,JSON.stringify(seq),cfg.thetaRev,cfg.rhoTravel,cfg.rhoDirection,cfg.feed);
   return started?jsonResponse({success:true,direct:true}):errResponse('Another direct pattern is already running.',409);
  }
+ if(p==='/run_playlist'&&m==='POST'){
+  if(directCalibrationActive())return errResponse('Finish or save the active machine calibration before starting a playlist.',409);
+  const name=playlistRequestName(b),stored=normalizedPlaylistFiles(playlists()[name]||[]);
+  if(!name||!stored.length)return errResponse('Playlist is empty or was not found.',404);
+  const files=b.shuffle?[...stored].sort(()=>Math.random()-.5):stored;
+  const seq=[];
+  for(const file of files){
+   const x=patternEntry(file);if(!x)continue;
+   const clear=String(b.clear_pattern||'none');let clearName=null;
+   if(clear==='from_center'||clear==='clear_from_in')clearName='clear_from_in.thr';
+   else if(clear==='from_perimeter'||clear==='clear_from_out')clearName='clear_from_out.thr';
+   else if(clear==='adaptive'){const st=directStatusNow();clearName=Number(st.rho||0)>=.5?'clear_from_out.thr':'clear_from_in.thr';}
+   const c=clearName&&patternEntry(clearName);if(c)seq.push({asset:c.native_path||c.thr_url.replace(/^\//,''),display:c.path||clearName});
+   seq.push({asset:x.native_path||x.thr_url.replace(/^\//,''),display:x.path});
+  }
+  if(!seq.length)return errResponse('No playable patterns were found in this playlist.',404);
+  const started=window.OrynAndroid&&window.OrynAndroid.directStartPattern&&window.OrynAndroid.directStartPattern(cfg.host,JSON.stringify(seq),cfg.thetaRev,cfg.rhoTravel,cfg.rhoDirection,cfg.feed);
+  return started?jsonResponse({success:true,direct:true,playlist_name:name,files:stored}):errResponse('Another direct pattern is already running.',409);
+ }
  if(p==='/send_home'){
    if(directCalibrationActive())return errResponse('Finish or save the active machine calibration before Home.',409);
    const started=!!(window.OrynAndroid&&window.OrynAndroid.directHome&&window.OrynAndroid.directHome(cfg.host,cfg.rhoTravel,cfg.rhoDirection,cfg.feed));
@@ -372,7 +410,7 @@ async function directFetch(u,init={}){
 function useDirectEndpoint(path){
  if(!directConfig())return false;
  if(path.startsWith('/api/rotation-calibration')||path.startsWith('/api/perimeter-calibration'))return true;
- return ['/api/table-info','/serial_status','/list_serial_ports','/connect','/disconnect','/run_theta_rho','/send_home','/send_coordinate','/move_to_center','/move_to_perimeter','/set_speed','/stop_execution','/force_stop','/pause_execution','/resume_execution','/soft_reset','/api/machine-hardware-profile','/api/pattern-designer/save','/delete_theta_rho_file'].includes(path);
+ return ['/api/table-info','/serial_status','/list_serial_ports','/connect','/disconnect','/run_theta_rho','/run_playlist','/send_home','/send_coordinate','/move_to_center','/move_to_perimeter','/set_speed','/stop_execution','/force_stop','/pause_execution','/resume_execution','/soft_reset','/api/machine-hardware-profile','/api/pattern-designer/save','/delete_theta_rho_file'].includes(path);
 }
 
 window.fetch=async function(input,init={}){
@@ -404,8 +442,8 @@ window.fetch=async function(input,init={}){
  if(p.startsWith('/api/pattern_history/'))return jsonResponse({actual_time_formatted:null,speed:null});
  if(p==='/list_all_playlists')return jsonResponse(Object.keys(playlists()));
  if(p==='/get_playlist') {const n=u.searchParams.get('name')||'';const ps=playlists();return jsonResponse({name:n,files:ps[n]||[]});}
- if(['/create_playlist','/modify_playlist'].includes(p)&&m==='POST'){const b=parseBody(init),ps=playlists();ps[b.playlist_name]=Array.isArray(b.files)?b.files:[];savePlaylists(ps);return jsonResponse({success:true});}
- if(p==='/add_to_playlist'&&m==='POST'){const b=parseBody(init),ps=playlists(),arr=ps[b.playlist_name]||[];if(b.pattern&&!arr.includes(b.pattern))arr.push(b.pattern);ps[b.playlist_name]=arr;savePlaylists(ps);return jsonResponse({success:true});}
+ if(['/create_playlist','/modify_playlist'].includes(p)&&m==='POST'){const result=updateLocalPlaylist(parseBody(init),true);return result.success?jsonResponse(result):errResponse(result.detail,400);}
+ if(p==='/add_to_playlist'&&m==='POST'){const result=updateLocalPlaylist(parseBody(init),false);return result.success?jsonResponse(result):errResponse(result.detail,400);}
  if(p==='/delete_playlist'){const b=parseBody(init),ps=playlists();delete ps[b.playlist_name];savePlaylists(ps);return jsonResponse({success:true});}
  if(p==='/rename_playlist'&&m==='POST'){const b=parseBody(init),ps=playlists();ps[b.new_name]=ps[b.old_name]||[];delete ps[b.old_name];savePlaylists(ps);return jsonResponse({success:true});}
  if(p==='/list_serial_ports')return jsonResponse([]);
