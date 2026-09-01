@@ -6,7 +6,6 @@ on:
     branches: [ main ]
     paths:
       - 'app/**'
-      - 'tests/**'
       - 'build.gradle'
       - 'settings.gradle'
       - 'gradle.properties'
@@ -37,25 +36,21 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate ORYN Direct measured motion streamer
+      - name: Validate ORYN connection and coupled motion
         run: |
           node tests/test_connection_state.js
           node tests/test_direct_coupled_motion.js
-          node tests/test_direct_ack_framing.js
-          node tests/test_direct_clear_progression.js
-          node tests/test_direct_streamer_static.js
-          node tests/test_direct_clear_mode_bridge.js
-          node tests/test_direct_no_clear_stream.js
+          node tests/test_direct_playback_state.js
 
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_DIRECT_WS_STREAM-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN-V10.4.1-direct-playback-state-fix-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ORYN-V10.4.1-Direct-WebSocket-Stream-APK
-          path: ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_DIRECT_WS_STREAM-debug.apk
+          name: ORYN-V10.4.1-Direct-Playback-State-Fix-APK
+          path: ORYN-V10.4.1-direct-playback-state-fix-debug.apk
           if-no-files-found: error

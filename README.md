@@ -1,11 +1,11 @@
-# ORYN Android — Unified Pi + Direct ESP32 — Final Measured Motion
+# ORYN Android V10.4.1 — Direct Playback State Fix
 
 This repository contains the consolidated ORYN Android application. It opens as a complete offline ORYN app and can then connect either to an ORYN Raspberry Pi table or directly to an ESP32 running FluidNC.
 
 ## Connection model
 
 - **Cold launch:** `ORYN Offline`. The bundled pattern library, Pattern Designer and offline functions remain available without a table.
-- **Direct ESP32:** use **ESP32 Smart Connect**. ORYN probes the saved IP first, then `fluidnc.local`, then private LAN / phone-hotspot subnets. A successful connection becomes the single active machine `ORYN Direct — ESP32 FluidNC`.
+- **Direct ESP32:** use **ESP32 Smart Connect**. ORYN probes the saved IP first, then `fluidnc.local`, then private LAN / phone-hotspot subnets. A successful connection becomes the single active machine `ORYN Direct — ESP32 FluidNC` and automatically starts Home when Home-on-connect is enabled.
 - **Raspberry Pi:** use **Scan for ORYN** or **Add ORYN Pi Manually**. Pi entries remain separate from Direct ESP32.
 - Direct ESP32 is **not stored as a fake Pi/remote table**. Old Direct/Offline ghost entries are cleaned on a true cold launch while saved Direct calibration/IP are preserved.
 
@@ -22,24 +22,21 @@ Direct calibration uses controller units, not physical millimetres. The current 
 
 Direct ESP32 playback now uses the same **coupled relative-delta mathematics as the locked ORYN Pi V9 motion core**. It does not treat X and Y as independent absolute axes. For each THR point it computes logical `delta_theta` and `delta_rho`, scales them with the saved 360° / center-to-perimeter calibrations, and adds the mechanical Theta→Rho compensation term before sending one coordinated `G91 G21 G1 X… Y…` block.
 
-For the compact 28BYJ/Mini Direct profile, the measured physical coupling is fixed at **X 256 steps/mm, Y 210 steps/mm, gear ratio 6.25, negative X→Y compensation**. The saved Full Circle and Perimeter calibration values remain live runtime inputs and are not hardcoded. Other non-Mini profiles retain the existing V9 fallback behavior.
+At the start of each motion session ORYN reads the controller's current X/Y `steps_per_mm` through the same exclusive connection used for playback. The measured compact 28BYJ/Mini profile uses X=256, Y=210, gear ratio=6.25 and negative X→Y compensation. **No FluidNC settings are changed by this detection.**
+
+The Direct player exposes native elapsed and estimated remaining seconds to the existing ORYN player UI. Playback keeps one persistent FluidNC session, treats read timeouts as waiting/backpressure, acknowledges every THR coordinate once, waits for final `<Idle>`, closes the session cleanly, and then permits the next pattern to start.
 
 This correction is important for clears such as `clear_from_out.thr`: the file contains about 33 spiral revolutions. On the compact coupled mechanism, sending only the logical rho value makes the ball linger near the perimeter and the pattern can fail mechanically after only a few turns. The coupled V9 compensation keeps physical Rho synchronized with the THR path.
-
-
-## Direct ESP32 continuous pattern transport
-
-Direct pattern playback uses one persistent FluidNC Grbl WebSocket channel on port **81**. Home, calibration and manual connection behavior remain on the existing working paths. During pattern playback, each coordinated relative X/Y block is sent once and the app waits for its real `ok`/`error` before sending the next THR point. Socket read gaps are treated only as waiting/backpressure. There is no fixed 15-second Direct playback abort, and completion waits for every point plus FluidNC `<Idle>`.
 
 ## Build APK with GitHub Actions
 
 Push this project to the `main` branch. The workflow `.github/workflows/build-android-apk.yml` builds with Android SDK 35, Java 17 and Gradle 8.9. Download the artifact named:
 
-`ORYN-V10.4.1-Direct-WebSocket-Stream-APK`
+`ORYN-V10.4.1-Direct-Playback-State-Fix-APK`
 
 The APK filename inside the artifact is:
 
-`ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_DIRECT_WS_STREAM-debug.apk`
+`ORYN-V10.4.1-direct-playback-state-fix-debug.apk`
 
 ## Upgrade from earlier Direct builds
 
@@ -56,16 +53,15 @@ If Node.js is installed, run:
 ```bash
 node tests/test_connection_state.js
 node tests/test_direct_coupled_motion.js
-node tests/test_direct_clear_progression.js
-node tests/test_direct_streamer_static.js
-node tests/test_direct_ack_framing.js
-node tests/test_direct_no_clear_stream.js
+node tests/test_direct_playback_state.js
 ```
 
 Expected result:
 
 ```text
 PASS connection-state deterministic tests
+PASS direct coupled motion parity
+PASS Direct auto-home, timer, consecutive-session, Idle, and clear-direction validation
 ```
 
 See `VALIDATION_REPORT.md` for the packaging-time checks and the explicit APK-build limitation.

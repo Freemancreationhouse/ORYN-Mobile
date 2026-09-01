@@ -1,21 +1,19 @@
-# ORYN V10.4.1 — Unified Final Measured Motion
+# ORYN V10.4.1 — Unified Motion Parity
 
-Build: `ORYN-ANDROID-V10.4.1-UNIFIED-FINAL-MEASURED-MOTION-20260901-1`
+Build: `ORYN-ANDROID-V10.4.1-UNIFIED-MOTION-PARITY-20260901-1`
 
-## Direct ESP32 pattern-motion correction only
+## Fixed
 
-- Uses the physically confirmed ORYN Mini coupling constants: 6.25 gear ratio, X 256 steps/mm, Y 210 steps/mm, negative X→Y coupling sign.
-- X+5 therefore produces approximately Y-0.975238 coupling compensation before any logical rho contribution.
-- Keeps saved live Full Circle and Perimeter calibration values authoritative; no user calibration values are hardcoded.
-- Sends coordinated relative FluidNC motion as `G91 G21 G1 X... Y... F...`.
-- Removes fixed acknowledgement-abort behavior from Direct pattern streaming.
-- Treats socket read timeout as planner back-pressure/waiting, never pattern completion.
-- Never retransmits an uncertain relative movement.
-- Requires every THR point to receive its FluidNC acknowledgement before completion.
-- Polls FluidNC until `<Idle>` after the final coordinate before marking the motion sequence finished.
-- Uses the same Direct streamer for clear and normal patterns.
-- Enforces progressive clear rho direction after the clear entry point: Center → Perimeter for `clear_from_in`, Perimeter → Center for `clear_from_out`.
+- Direct ESP32 `.thr` playback now ports the locked ORYN Pi V9 coupled Theta–Rho motion mathematics.
+- Replaced independent absolute `G90 X/Y` path streaming with coordinated relative `G91 G21 G1 XΔ YΔ` blocks.
+- Added the mechanical Theta→Rho coupling compensation term.
+- Reads live FluidNC X/Y `steps_per_mm` before Direct playback; it never writes or changes those settings.
+- Detects the compact 28BYJ/Mini profile and uses its proven gear ratio / winding for coupling.
+- Keeps saved 360° and perimeter calibrations authoritative.
+- Waits for the first physical entry point and final FluidNC Idle before completion.
+- Retains the unified Offline / Pi / Direct ESP32 connection state, Wi-Fi/hotspot setup, Home, live calibration, Pattern Designer, Pattern Forge and bundled patterns.
+- Retains the PolyForm Noncommercial 1.0.0 repository license for ORYN-owned code.
 
-## Preserved from uploaded base
+## Why this was necessary
 
-No redesign was made. Existing ESP32 connection, Home Wi-Fi / hotspot flow, manual IP, ORYN Direct header, Home, Full Circle calibration, Perimeter calibration, Pi support, 100 offline patterns, Pattern Designer, Pattern Forge, UI/branding, and non-commercial license remain in place.
+The compact Dune-Weaver-style mechanism is mechanically coupled: rotating Theta also induces Rho carriage motion. The previous Android Direct streamer scaled theta and rho correctly but treated the motor axes as independent absolute coordinates. On `clear_from_out.thr`, this left the physical ball near the perimeter after several rotations even though logical rho was decreasing. The Pi V9 core already contains the required compensation; this build ports that exact formula into Direct ESP32 playback.

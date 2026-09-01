@@ -20,7 +20,6 @@ import android.os.Bundle;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.PowerManager;
 import android.provider.Settings;
 import android.util.Base64;
 import android.webkit.JavascriptInterface;
@@ -69,9 +68,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -80,12 +76,6 @@ public class MainActivity extends Activity {
     private static final int FILE_CHOOSER_REQUEST = 7001;
     private static final int SAVE_FILE_REQUEST = 7002;
     private static final int WIFI_PERMISSION_REQUEST = 7003;
-    // Measured ORYN Mini mechanical coupling constants. Saved user calibration
-    // values (Full Circle and Perimeter) remain live runtime inputs.
-    private static final double MINI_X_STEPS_PER_MM = 256.0;
-    private static final double MINI_Y_STEPS_PER_MM = 210.0;
-    private static final double MINI_GEAR_RATIO = 6.25;
-    private static final double MINI_COUPLING_SIGN = -1.0;
     private WebView webView;
     private FrameLayout rootView;
     private ValueCallback<Uri[]> fileChooserCallback;
@@ -118,14 +108,6 @@ public class MainActivity extends Activity {
     private final AtomicBoolean directHoming = new AtomicBoolean(false);
     private volatile boolean directControllerOnline = false;
     private volatile Socket directPatternSocket;
-    // Direct pattern playback owns one persistent FluidNC WebSocket channel on
-    // port 81. Home/calibration/manual actions remain on the existing Telnet path.
-    private volatile DirectFluidNcWebSocketSession directPatternWsSession;
-    private final Object directSocketWriteLock = new Object();
-    private volatile WifiManager.WifiLock directMotionWifiLock;
-    private volatile PowerManager.WakeLock directMotionWakeLock;
-    private volatile String directLastTx = "";
-    private volatile String directLastRx = "";
     private volatile String directLastError = "";
     private volatile String directCurrentFile = null;
     private volatile int directPoint = 0;
@@ -141,6 +123,15 @@ public class MainActivity extends Activity {
     private volatile double directGearRatio = 0.0;
     private volatile double directCouplingSign = 0.0;
     private volatile String directMachineName = "";
+    // Playback timing is native so the locked web player receives the same
+    // elapsed/remaining fields as the Pi backend. Times are per current THR
+    // file (a clear file and the selected pattern each get their own clock).
+    private volatile long directFileStartedAtMs = 0L;
+    private volatile long directPauseStartedAtMs = 0L;
+    private volatile long directPausedAccumulatedMs = 0L;
+    private volatile long directFileFinishedAtMs = 0L;
+    private volatile double directLastCompletedSeconds = 0.0;
+    private volatile long directLastSocketClosedAtMs = 0L;
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -328,7 +319,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-unified-connection"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct-playback-state-fix"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
@@ -422,23 +413,37 @@ public class MainActivity extends Activity {
         @JavascriptInterface public String directStatus() {
             JSONObject o = new JSONObject();
             try {
+                double elapsed = directElapsedSeconds();
+                double remaining = directEstimatedRemainingSeconds(elapsed);
                 o.put("connected", directControllerOnline);
                 o.put("is_running", directRunning.get()); o.put("is_paused", directPaused.get()); o.put("is_homing", directHoming.get());
                 o.put("current_file", directCurrentFile); o.put("current", directPoint); o.put("total", directTotal);
                 o.put("percentage", directTotal > 0 ? (100.0 * directPoint / directTotal) : 0.0);
+                o.put("elapsed_time", elapsed); o.put("remaining_time", remaining);
+                o.put("last_completed_time", directLastCompletedSeconds);
                 o.put("theta", directTheta); o.put("rho", directRho); o.put("speed", directSpeed); o.put("error", directLastError);
                 o.put("x_steps_per_mm", directXStepsPerMm); o.put("y_steps_per_mm", directYStepsPerMm);
                 o.put("gear_ratio", directGearRatio); o.put("coupling_sign", directCouplingSign);
                 o.put("machine_name", directMachineName);
-                o.put("last_tx", directLastTx); o.put("last_rx", directLastRx);
-                o.put("pattern_transport", directPatternWsSession != null ? "FluidNC WebSocket :81" : null);
             } catch (Exception ignored) {}
             return o.toString();
         }
 
         @JavascriptInterface public void directStopNow() { directStop(); }
-        @JavascriptInterface public void directPauseNow() { directRealtime((byte)'!'); directPaused.set(true); }
-        @JavascriptInterface public void directResumeNow() { directRealtime((byte)'~'); directPaused.set(false); }
+        @JavascriptInterface public void directPauseNow() {
+            if (directRunning.get() && directPaused.compareAndSet(false, true)) {
+                directPauseStartedAtMs = System.currentTimeMillis();
+                directRealtime((byte)'!');
+            }
+        }
+        @JavascriptInterface public void directResumeNow() {
+            if (directRunning.get() && directPaused.compareAndSet(true, false)) {
+                long started = directPauseStartedAtMs;
+                if (started > 0L) directPausedAccumulatedMs += Math.max(0L, System.currentTimeMillis() - started);
+                directPauseStartedAtMs = 0L;
+                directRealtime((byte)'~');
+            }
+        }
     }
 
     private String probeDirectController(String host) {
@@ -1006,6 +1011,7 @@ public class MainActivity extends Activity {
             directLastError = e.getMessage() == null ? e.toString() : e.getMessage();
         } finally {
             try { if (sock != null) sock.close(); } catch (Exception ignored) {}
+            directLastSocketClosedAtMs = System.currentTimeMillis();
             if (directPatternSocket == sock) directPatternSocket = null;
             directHoming.set(false); directStopRequested.set(false);
         }
@@ -1019,45 +1025,164 @@ public class MainActivity extends Activity {
         String machineName;
     }
 
+    /**
+     * One exclusive, persistent FluidNC Telnet session for an entire Direct
+     * playback. It frames command acknowledgements and status reports without
+     * discarding partial reads. A socket read timeout means only "keep waiting";
+     * a relative move is never resent because its acknowledgement was delayed.
+     */
+    private final class DirectFluidNcSession implements AutoCloseable {
+        final Socket socket;
+        final InputStream in;
+        final OutputStream out;
+        final StringBuilder receiveBuffer = new StringBuilder();
+
+        DirectFluidNcSession(String host) throws Exception {
+            long settle = 350L - Math.max(0L, System.currentTimeMillis() - directLastSocketClosedAtMs);
+            if (settle > 0L) Thread.sleep(settle);
+            socket = createDirectSocketForHost(host);
+            socket.setTcpNoDelay(true);
+            socket.setKeepAlive(true);
+            socket.connect(new InetSocketAddress(host, 23), 3000);
+            socket.setSoTimeout(1200);
+            in = socket.getInputStream();
+            out = socket.getOutputStream();
+            directPatternSocket = socket;
+            directControllerOnline = true;
+        }
+
+        String command(String line) throws Exception {
+            out.write((line + "\n").getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            StringBuilder transcript = new StringBuilder();
+            while (true) {
+                if (directStopRequested.get())
+                    throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
+                String frame = nextFrame();
+                if (frame == null) continue; // waiting/backpressure, never completion
+                String clean = cleanFluidNcFrame(frame);
+                if (clean.isEmpty()) continue;
+                if (transcript.length() > 0) transcript.append('\n');
+                transcript.append(clean);
+                String lower = clean.toLowerCase(java.util.Locale.US);
+                if (lower.startsWith("error:") || lower.contains("alarm:"))
+                    throw new java.io.IOException(clean);
+                if (lower.equals("ok") || lower.endsWith(" ok")) return transcript.toString();
+            }
+        }
+
+        void awaitIdle() throws Exception {
+            while (true) {
+                if (directStopRequested.get())
+                    throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
+                out.write('?');
+                out.flush();
+                long queryWindow = System.currentTimeMillis() + 1500L;
+                while (System.currentTimeMillis() < queryWindow) {
+                    String frame = nextFrame();
+                    if (frame == null) continue;
+                    String clean = cleanFluidNcFrame(frame);
+                    String lower = clean.toLowerCase(java.util.Locale.US);
+                    if (lower.contains("alarm:")) throw new java.io.IOException(clean);
+                    if (clean.contains("<Idle")) return;
+                }
+            }
+        }
+
+        private String nextFrame() throws Exception {
+            while (true) {
+                while (receiveBuffer.length() > 0 &&
+                        (receiveBuffer.charAt(0) == '\r' || receiveBuffer.charAt(0) == '\n')) {
+                    receiveBuffer.deleteCharAt(0);
+                }
+                int newline = receiveBuffer.indexOf("\n");
+                int statusStart = receiveBuffer.indexOf("<");
+                int statusEnd = statusStart >= 0 ? receiveBuffer.indexOf(">", statusStart + 1) : -1;
+                if (statusStart >= 0 && statusEnd >= statusStart && (newline < 0 || statusEnd < newline)) {
+                    String frame = receiveBuffer.substring(statusStart, statusEnd + 1);
+                    receiveBuffer.delete(0, statusEnd + 1);
+                    return frame;
+                }
+                if (newline >= 0) {
+                    String frame = receiveBuffer.substring(0, newline);
+                    receiveBuffer.delete(0, newline + 1);
+                    return frame;
+                }
+                byte[] bytes = new byte[1024];
+                try {
+                    int count = in.read(bytes);
+                    if (count < 0) throw new java.io.IOException("FluidNC connection closed");
+                    receiveBuffer.append(new String(bytes, 0, count, StandardCharsets.UTF_8));
+                } catch (java.net.SocketTimeoutException waiting) {
+                    return null;
+                }
+            }
+        }
+
+        @Override public void close() {
+            if (directPatternSocket == socket) directPatternSocket = null;
+            try { socket.close(); } catch (Exception ignored) { }
+            directLastSocketClosedAtMs = System.currentTimeMillis();
+        }
+    }
+
+    private String cleanFluidNcFrame(String frame) {
+        if (frame == null) return "";
+        // Telnet negotiation/control bytes can precede the readable Grbl line.
+        return frame.replaceAll("[\\p{Cc}&&[^\\t]]", "").trim();
+    }
+
     private DirectKinematicsProfile detectDirectKinematics(String host) {
+        DirectKinematicsProfile k = new DirectKinematicsProfile();
         String response = "";
         try {
             response = telnetCommand(host,
                     "$I\n$/axes/x/steps_per_mm\n$/axes/y/steps_per_mm", 2500);
         } catch (Exception ignored) { }
-        return directKinematicsFromResponse(response);
-    }
 
-    private DirectKinematicsProfile directKinematicsFromResponse(String response) {
-        DirectKinematicsProfile k = new DirectKinematicsProfile();
         k.machineName = extractFluidNcMachineName(response);
         k.xStepsPerMm = extractFluidNcSetting(response, "x", "steps_per_mm");
         k.yStepsPerMm = extractFluidNcSetting(response, "y", "steps_per_mm");
-        if ((k.machineName == null || k.machineName.trim().isEmpty()) && directMachineName != null)
-            k.machineName = directMachineName;
-        if (!(k.xStepsPerMm > 0.0) && directXStepsPerMm > 0.0) k.xStepsPerMm = directXStepsPerMm;
-        if (!(k.yStepsPerMm > 0.0) && directYStepsPerMm > 0.0) k.yStepsPerMm = directYStepsPerMm;
 
         String machine = k.machineName == null ? "" : k.machineName.toLowerCase(java.util.Locale.US);
-        // ORYN Mini / 28BYJ-48 measured physical coupling (confirmed on the
-        // actual table): X+ requires Y- compensation and X- requires Y+.
-        // These are mechanical/controller scale constants, NOT the user's saved
-        // Full Circle or Perimeter calibration values. Those live values are
-        // still supplied separately as thetaRevUnits / rhoTravelUnits.
-        boolean miniByj = machine.contains("28byj") || machine.contains("mini")
-                || (Math.abs(k.xStepsPerMm - MINI_X_STEPS_PER_MM) < 0.01
-                    && Math.abs(k.yStepsPerMm - MINI_Y_STEPS_PER_MM) < 0.01);
-        if (miniByj) {
-            k.xStepsPerMm = MINI_X_STEPS_PER_MM;
-            k.yStepsPerMm = MINI_Y_STEPS_PER_MM;
-            k.gearRatio = MINI_GEAR_RATIO;
-            k.sourceSign = MINI_COUPLING_SIGN;
-        } else {
-            // Preserve the existing non-Mini V9 behavior.
-            k.gearRatio = 10.0;
-            k.sourceSign = 1.0;
-        }
+        // The measured ORYN Mini 28BYJ winding uses the confirmed 6.25 gear
+        // ratio and negative X-to-Y coupling. For other ORYN profiles keep the V9 source
+        // fallback (ratio 10, positive winding) unless a future profile overrides it.
+        boolean miniByj = machine.contains("28byj") || machine.contains("mini");
+        k.gearRatio = miniByj ? 6.25 : 10.0;
+        k.sourceSign = miniByj ? -1.0 : 1.0;
 
+        // Do not overwrite controller settings. Fallbacks are used only if the
+        // readback was unavailable. The normal path uses the controller's actual
+        // current X/Y steps-per-mm. The measured Mini fallback is 256 / 210.
+        if (!(k.xStepsPerMm > 0.0)) k.xStepsPerMm = miniByj ? 256.0 : 0.0;
+        if (!(k.yStepsPerMm > 0.0)) k.yStepsPerMm = miniByj ? 210.0 : 0.0;
+
+        directXStepsPerMm = k.xStepsPerMm;
+        directYStepsPerMm = k.yStepsPerMm;
+        directGearRatio = k.gearRatio;
+        directCouplingSign = k.sourceSign;
+        directMachineName = k.machineName == null ? "" : k.machineName;
+        return k;
+    }
+
+    private DirectKinematicsProfile detectDirectKinematics(DirectFluidNcSession session) throws Exception {
+        DirectKinematicsProfile k = new DirectKinematicsProfile();
+        StringBuilder responseBuilder = new StringBuilder(session.command("$I"));
+        try { responseBuilder.append('\n').append(session.command("$/axes/x/steps_per_mm")); }
+        catch (Exception ignored) { }
+        try { responseBuilder.append('\n').append(session.command("$/axes/y/steps_per_mm")); }
+        catch (Exception ignored) { }
+        String response = responseBuilder.toString();
+        k.machineName = extractFluidNcMachineName(response);
+        k.xStepsPerMm = extractFluidNcSetting(response, "x", "steps_per_mm");
+        k.yStepsPerMm = extractFluidNcSetting(response, "y", "steps_per_mm");
+        String machine = k.machineName == null ? "" : k.machineName.toLowerCase(java.util.Locale.US);
+        boolean miniByj = machine.contains("28byj") || machine.contains("mini");
+        k.gearRatio = miniByj ? 6.25 : 10.0;
+        k.sourceSign = miniByj ? -1.0 : 1.0;
+        if (!(k.xStepsPerMm > 0.0)) k.xStepsPerMm = miniByj ? 256.0 : 0.0;
+        if (!(k.yStepsPerMm > 0.0)) k.yStepsPerMm = miniByj ? 210.0 : 0.0;
         directXStepsPerMm = k.xStepsPerMm;
         directYStepsPerMm = k.yStepsPerMm;
         directGearRatio = k.gearRatio;
@@ -1094,30 +1219,6 @@ public class MainActivity extends Activity {
     private double directCouplingOffset(double xIncrement, double rhoDirection, DirectKinematicsProfile k) {
         if (k == null || !(k.xStepsPerMm > 0.0) || !(k.yStepsPerMm > 0.0) || !(k.gearRatio > 0.0)) return 0.0;
         return xIncrement * (k.xStepsPerMm / (k.gearRatio * k.yStepsPerMm)) * k.sourceSign * rhoDirection;
-    }
-
-    private boolean isDirectClearFromIn(String displayName) {
-        if (displayName == null) return false;
-        String n = new File(displayName).getName().toLowerCase(java.util.Locale.US);
-        return n.equals("clear_from_in.thr");
-    }
-
-    private boolean isDirectClearFromOut(String displayName) {
-        if (displayName == null) return false;
-        String n = new File(displayName).getName().toLowerCase(java.util.Locale.US);
-        return n.equals("clear_from_out.thr");
-    }
-
-    private double directClearRhoTarget(double requestedRho, double previousRho,
-                                        boolean clearFromIn, boolean clearFromOut,
-                                        boolean firstPoint) {
-        double r = Math.max(0.0, Math.min(1.0, requestedRho));
-        // The first THR coordinate is the required clear entry position:
-        // clear_from_in starts at Center; clear_from_out starts at Perimeter.
-        if (firstPoint) return r;
-        if (clearFromIn) return Math.max(previousRho, r);
-        if (clearFromOut) return Math.min(previousRho, r);
-        return r;
     }
 
     private double planDirectFeed(double dx, double dy, double requestedFeed) {
@@ -1161,416 +1262,18 @@ public class MainActivity extends Activity {
         return result.toString();
     }
 
-    private void acquireDirectPatternRuntimeLocks() {
-        // Keep Android from power-throttling a long local FluidNC stream. These
-        // locks exist only while Direct pattern playback is active; they do not
-        // alter Wi-Fi selection, Pi support, or normal app networking.
-        try {
-            if (wifiManager != null) {
-                WifiManager.WifiLock lock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "ORYN:DirectPatternWifi");
-                lock.setReferenceCounted(false);
-                lock.acquire();
-                directMotionWifiLock = lock;
-            }
-        } catch (Exception ignored) { directMotionWifiLock = null; }
-        try {
-            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-            if (pm != null) {
-                PowerManager.WakeLock lock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ORYN:DirectPatternCpu");
-                lock.setReferenceCounted(false);
-                lock.acquire();
-                directMotionWakeLock = lock;
-            }
-        } catch (Exception ignored) { directMotionWakeLock = null; }
-    }
-
-    private void releaseDirectPatternRuntimeLocks() {
-        try { WifiManager.WifiLock lock = directMotionWifiLock; if (lock != null && lock.isHeld()) lock.release(); } catch (Exception ignored) { }
-        directMotionWifiLock = null;
-        try { PowerManager.WakeLock lock = directMotionWakeLock; if (lock != null && lock.isHeld()) lock.release(); } catch (Exception ignored) { }
-        directMotionWakeLock = null;
-    }
-
-    /**
-     * One persistent FluidNC WebSocket motion channel for the complete Direct
-     * clear + pattern sequence. FluidNC exposes a Grbl-compatible WebSocket
-     * channel on port 81 (HTTP port + 1). Commands and their real ok/error
-     * acknowledgements stay on this single connection for the whole job.
-     *
-     * Socket read timeouts are only reader heartbeats. They never complete,
-     * abort, or resend a relative move.
-     */
-    private final class DirectFluidNcWebSocketSession implements AutoCloseable {
-        private static final String WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-        private final Socket socket;
-        private final InputStream input;
-        private final OutputStream output;
-        private final BlockingQueue<String> lineReplies = new LinkedBlockingQueue<>();
-        private final BlockingQueue<String> statusFrames = new LinkedBlockingQueue<>();
-        private final AtomicBoolean closed = new AtomicBoolean(false);
-        private final java.security.SecureRandom maskRandom = new java.security.SecureRandom();
-        private volatile Exception readerFailure;
-        private final Thread readerThread;
-
-        DirectFluidNcWebSocketSession(Socket socket, String host) throws Exception {
-            this.socket = socket;
-            this.input = socket.getInputStream();
-            this.output = socket.getOutputStream();
-            performHandshake(host);
-            // The persistent reader uses a short SO_TIMEOUT only as a wake-up
-            // heartbeat. A timeout never means EOF, completion, or failure.
-            this.socket.setSoTimeout(1000);
-            this.readerThread = new Thread(this::readerLoop, "ORYN-FluidNC-DirectWebSocketReader");
-            this.readerThread.setDaemon(true);
-            this.readerThread.start();
-        }
-
-        private void performHandshake(String host) throws Exception {
-            socket.setSoTimeout(3500);
-            byte[] nonce = new byte[16];
-            maskRandom.nextBytes(nonce);
-            String key = Base64.encodeToString(nonce, Base64.NO_WRAP);
-            String request = "GET / HTTP/1.1\r\n"
-                    + "Host: " + host + ":81\r\n"
-                    + "Upgrade: websocket\r\n"
-                    + "Connection: Upgrade\r\n"
-                    + "Sec-WebSocket-Key: " + key + "\r\n"
-                    + "Sec-WebSocket-Version: 13\r\n"
-                    + "Origin: http://" + host + "\r\n\r\n";
-            synchronized (directSocketWriteLock) {
-                output.write(request.getBytes(StandardCharsets.ISO_8859_1));
-                output.flush();
-            }
-
-            java.io.ByteArrayOutputStream headers = new java.io.ByteArrayOutputStream();
-            long deadline = System.currentTimeMillis() + 5000L; // handshake only; no motion has been sent
-            int matched = 0;
-            byte[] terminator = new byte[]{'\r','\n','\r','\n'};
-            while (matched < terminator.length) {
-                if (directStopRequested.get()) throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
-                if (System.currentTimeMillis() >= deadline) throw new java.io.IOException("FluidNC WebSocket handshake timed out before motion start");
-                int b;
-                try { b = input.read(); }
-                catch (java.net.SocketTimeoutException timeout) { continue; }
-                if (b < 0) throw new java.io.EOFException("FluidNC WebSocket closed during handshake");
-                headers.write(b);
-                if ((byte)b == terminator[matched]) matched++;
-                else matched = ((byte)b == terminator[0]) ? 1 : 0;
-                if (headers.size() > 16384) throw new java.io.IOException("FluidNC WebSocket handshake response was too large");
-            }
-            String response = headers.toString(StandardCharsets.ISO_8859_1.name());
-            String first = response.split("\\r?\\n", 2)[0].trim();
-            if (!first.contains(" 101 ")) throw new java.io.IOException("FluidNC WebSocket upgrade failed: " + first);
-
-            String accept = "";
-            for (String line : response.split("\\r?\\n")) {
-                int colon = line.indexOf(':');
-                if (colon > 0 && line.substring(0, colon).trim().equalsIgnoreCase("Sec-WebSocket-Accept")) {
-                    accept = line.substring(colon + 1).trim();
-                    break;
-                }
-            }
-            java.security.MessageDigest sha1 = java.security.MessageDigest.getInstance("SHA-1");
-            String expected = Base64.encodeToString(
-                    sha1.digest((key + WS_GUID).getBytes(StandardCharsets.ISO_8859_1)), Base64.NO_WRAP);
-            if (!expected.equals(accept)) throw new java.io.IOException("FluidNC WebSocket handshake validation failed");
-        }
-
-        private int readFrameByte() throws Exception {
-            while (!closed.get()) {
-                try {
-                    int b = input.read();
-                    if (b < 0) throw new java.io.EOFException("FluidNC WebSocket connection closed");
-                    return b;
-                } catch (java.net.SocketTimeoutException timeout) {
-                    // Waiting/backpressure only. Preserve the partially read frame.
-                }
-            }
-            throw new java.io.EOFException("FluidNC WebSocket connection closed");
-        }
-
-        private void readFully(byte[] dst, int off, int len) throws Exception {
-            int done = 0;
-            while (done < len) {
-                if (closed.get()) throw new java.io.EOFException("FluidNC WebSocket connection closed");
-                try {
-                    int n = input.read(dst, off + done, len - done);
-                    if (n < 0) throw new java.io.EOFException("FluidNC WebSocket connection closed");
-                    done += n;
-                } catch (java.net.SocketTimeoutException timeout) {
-                    // Waiting/backpressure only. Never discard a partial frame.
-                }
-            }
-        }
-
-        private long readLength64() throws Exception {
-            long len = 0L;
-            for (int i = 0; i < 8; i++) len = (len << 8) | (readFrameByte() & 0xffL);
-            return len;
-        }
-
-        private void readerLoop() {
-            java.io.ByteArrayOutputStream fragmented = null;
-            try {
-                while (!closed.get()) {
-                    int b1;
-                    try {
-                        b1 = input.read();
-                        if (b1 < 0) throw new java.io.EOFException("FluidNC WebSocket connection closed");
-                    } catch (java.net.SocketTimeoutException timeout) {
-                        continue; // heartbeat only
-                    }
-                    int b2 = readFrameByte();
-                    boolean fin = (b1 & 0x80) != 0;
-                    int opcode = b1 & 0x0f;
-                    boolean masked = (b2 & 0x80) != 0;
-                    long length = b2 & 0x7f;
-                    if (length == 126) length = ((readFrameByte() & 0xffL) << 8) | (readFrameByte() & 0xffL);
-                    else if (length == 127) length = readLength64();
-                    if (length < 0 || length > 4L * 1024L * 1024L) throw new java.io.IOException("FluidNC WebSocket frame is too large");
-                    byte[] mask = null;
-                    if (masked) { mask = new byte[4]; readFully(mask, 0, 4); }
-                    byte[] payload = new byte[(int)length];
-                    if (payload.length > 0) readFully(payload, 0, payload.length);
-                    if (mask != null) for (int i = 0; i < payload.length; i++) payload[i] = (byte)(payload[i] ^ mask[i & 3]);
-
-                    if (opcode == 0x8) throw new java.io.EOFException("FluidNC WebSocket closed the motion channel");
-                    if (opcode == 0x9) { sendFrame(0xA, payload); continue; } // protocol ping -> pong
-                    if (opcode == 0xA) continue;
-
-                    if (opcode == 0x0) {
-                        if (fragmented == null) continue;
-                        fragmented.write(payload, 0, payload.length);
-                        if (fin) {
-                            handleProtocolMessage(fragmented.toByteArray());
-                            fragmented = null;
-                        }
-                        continue;
-                    }
-                    if (opcode != 0x1 && opcode != 0x2) continue;
-                    if (!fin) {
-                        fragmented = new java.io.ByteArrayOutputStream();
-                        fragmented.write(payload, 0, payload.length);
-                        continue;
-                    }
-                    // FluidNC can use text or binary WebSocket messages for console output.
-                    handleProtocolMessage(payload);
-                }
-            } catch (Exception e) {
-                if (!closed.get()) readerFailure = e;
-            }
-        }
-
-        private void handleProtocolMessage(byte[] payload) {
-            if (payload == null || payload.length == 0) return;
-            String text = new String(payload, StandardCharsets.UTF_8).replace("\u0000", "");
-            String trimmed = text.trim();
-            if (!trimmed.isEmpty()) directLastRx = trimmed;
-
-            // WebSocket message boundaries are preserved, so management traffic
-            // such as CURRENT_ID / ACTIVE_ID / PING can never become glued to a
-            // later "ok" token as happened with arbitrary raw TCP chunk parsing.
-            String[] pieces = text.split("\\r?\\n", -1);
-            for (String piece : pieces) {
-                String work = piece == null ? "" : piece.trim();
-                if (work.isEmpty()) continue;
-
-                StringBuilder nonStatus = new StringBuilder();
-                int cursor = 0;
-                while (cursor < work.length()) {
-                    int lt = work.indexOf('<', cursor);
-                    if (lt < 0) { nonStatus.append(work.substring(cursor)); break; }
-                    if (lt > cursor) nonStatus.append(work, cursor, lt);
-                    int gt = work.indexOf('>', lt + 1);
-                    if (gt < 0) { nonStatus.append(work.substring(lt)); break; }
-                    String frame = work.substring(lt, gt + 1).trim();
-                    if (!frame.isEmpty()) statusFrames.offer(frame);
-                    cursor = gt + 1;
-                }
-                String line = nonStatus.toString().trim();
-                if (!line.isEmpty()) lineReplies.offer(line);
-            }
-        }
-
-        private void sendFrame(int opcode, byte[] payload) throws Exception {
-            checkTransport();
-            sendFrameUnchecked(opcode, payload);
-        }
-
-        private void sendFrameUnchecked(int opcode, byte[] payload) throws Exception {
-            if (closed.get() || socket.isClosed() || !socket.isConnected())
-                throw new java.io.EOFException("FluidNC WebSocket connection closed");
-            if (payload == null) payload = new byte[0];
-            byte[] mask = new byte[4];
-            maskRandom.nextBytes(mask);
-            java.io.ByteArrayOutputStream frame = new java.io.ByteArrayOutputStream(payload.length + 16);
-            frame.write(0x80 | (opcode & 0x0f));
-            int len = payload.length;
-            if (len <= 125) frame.write(0x80 | len);
-            else if (len <= 0xffff) {
-                frame.write(0x80 | 126); frame.write((len >>> 8) & 0xff); frame.write(len & 0xff);
-            } else {
-                frame.write(0x80 | 127);
-                long x = len;
-                for (int shift = 56; shift >= 0; shift -= 8) frame.write((int)((x >>> shift) & 0xff));
-            }
-            frame.write(mask, 0, mask.length);
-            for (int i = 0; i < payload.length; i++) frame.write(payload[i] ^ mask[i & 3]);
-            synchronized (directSocketWriteLock) {
-                output.write(frame.toByteArray());
-                output.flush();
-            }
-        }
-
-        private void sendText(String text) throws Exception {
-            sendFrame(0x1, String.valueOf(text == null ? "" : text).getBytes(StandardCharsets.UTF_8));
-        }
-
-        private void checkTransport() throws Exception {
-            if (directStopRequested.get()) throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
-            if (readerFailure != null) throw readerFailure;
-            if (closed.get() || socket.isClosed() || !socket.isConnected()) throw new java.io.EOFException("FluidNC WebSocket connection closed");
-        }
-
-        void discardStartupTraffic() throws Exception {
-            // Only before any movement: drain WebSocket management messages
-            // (CURRENT_ID, ACTIVE_ID, PING) so no startup text can be mistaken
-            // for a command acknowledgement.
-            long end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(180);
-            while (System.nanoTime() < end) {
-                checkTransport();
-                String line = lineReplies.poll(25, TimeUnit.MILLISECONDS);
-                if (line != null) {
-                    String z = line.trim().toLowerCase(java.util.Locale.US);
-                    if (containsFluidNcAlarm(z) || z.startsWith("error:")) throw new java.io.IOException(line);
-                }
-                String frame = statusFrames.poll();
-                if (frame != null) {
-                    String z = frame.toLowerCase(java.util.Locale.US);
-                    if (containsFluidNcAlarm(z) || z.contains("<alarm")) throw new java.io.IOException(frame);
-                }
-            }
-        }
-
-        void sendCommandAndWaitOk(String command) throws Exception {
-            checkTransport();
-            directLastTx = command;
-            // Exactly one WebSocket text transmission. If acknowledgement is
-            // delayed, wait without deadline and NEVER resend the relative move.
-            sendText(command + "\n");
-            while (true) {
-                checkTransport();
-                String asyncStatus = statusFrames.poll();
-                if (asyncStatus != null) {
-                    String zs = asyncStatus.toLowerCase(java.util.Locale.US);
-                    if (zs.contains("<alarm") || containsFluidNcAlarm(zs) || zs.contains("error:"))
-                        throw new java.io.IOException(asyncStatus);
-                }
-                String reply = lineReplies.poll(500, TimeUnit.MILLISECONDS);
-                if (reply == null) continue; // waiting/backpressure, not completion
-                String z = reply.trim().toLowerCase(java.util.Locale.US);
-                if (z.equals("ok")) return;
-                if (containsFluidNcAlarm(z) || z.startsWith("error:") || z.contains("\nerror:"))
-                    throw new java.io.IOException(reply);
-                // CURRENT_ID / ACTIVE_ID / PING / [MSG:...] are informational.
-            }
-        }
-
-        String sendCommandAndCollectUntilOk(String command) throws Exception {
-            checkTransport();
-            directLastTx = command;
-            sendText(command + "\n");
-            StringBuilder collected = new StringBuilder();
-            while (true) {
-                checkTransport();
-                String asyncStatus = statusFrames.poll();
-                if (asyncStatus != null) {
-                    String zs = asyncStatus.toLowerCase(java.util.Locale.US);
-                    if (zs.contains("<alarm") || containsFluidNcAlarm(zs) || zs.contains("error:"))
-                        throw new java.io.IOException(asyncStatus);
-                }
-                String reply = lineReplies.poll(500, TimeUnit.MILLISECONDS);
-                if (reply == null) continue;
-                String z = reply.trim().toLowerCase(java.util.Locale.US);
-                if (z.equals("ok")) return collected.toString();
-                if (containsFluidNcAlarm(z) || z.startsWith("error:") || z.contains("\nerror:"))
-                    throw new java.io.IOException(reply);
-                if (collected.length() > 0) collected.append('\n');
-                collected.append(reply);
-            }
-        }
-
-        void sendRealtime(byte command) throws Exception {
-            checkTransport();
-            directLastTx = String.format(java.util.Locale.US, "realtime:0x%02X", command & 0xff);
-            sendText(String.valueOf((char)(command & 0xff)));
-        }
-
-        void sendEmergencyReset() throws Exception {
-            // Stop is allowed after directStopRequested is set. Send ctrl-X once
-            // as a valid WebSocket text frame, then the caller closes the channel.
-            directLastTx = "realtime:0x18";
-            sendFrameUnchecked(0x1, new byte[]{0x18});
-        }
-
-        void waitUntilIdle() throws Exception {
-            while (true) {
-                checkTransport();
-                statusFrames.clear();
-                directLastTx = "?";
-                sendText("?");
-                long nextQuery = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1400);
-                while (System.nanoTime() < nextQuery) {
-                    checkTransport();
-                    String frame = statusFrames.poll(150, TimeUnit.MILLISECONDS);
-                    if (frame != null) {
-                        String z = frame.toLowerCase(java.util.Locale.US);
-                        if (z.contains("<idle")) return;
-                        if (containsFluidNcAlarm(z) || z.contains("<alarm") || z.contains("error:"))
-                            throw new java.io.IOException(frame);
-                        break; // Run/Jog/Hold: ask again after a short interval.
-                    }
-                    String line = lineReplies.poll();
-                    if (line != null) {
-                        String z = line.trim().toLowerCase(java.util.Locale.US);
-                        if (containsFluidNcAlarm(z) || z.startsWith("error:")) throw new java.io.IOException(line);
-                    }
-                }
-                Thread.sleep(100);
-            }
-        }
-
-        @Override public void close() {
-            if (!closed.compareAndSet(false, true)) return;
-            try { socket.close(); } catch (Exception ignored) { }
-            try { readerThread.interrupt(); } catch (Exception ignored) { }
-        }
-    }
-
     private void runDirectPattern(String host, String assetPathsJson, double thetaRevUnits, double rhoTravelUnits, double rhoDirection, double feed) {
-        Socket sock = null;
-        DirectFluidNcWebSocketSession session = null;
-        acquireDirectPatternRuntimeLocks();
+        DirectFluidNcSession session = null;
         try {
             JSONArray paths = new JSONArray(assetPathsJson);
             String h = normalizeDirectHost(host);
-            // One exclusive FluidNC WebSocket motion session owns the complete
-            // clear + pattern sequence. Home/calibration/manual commands keep the
-            // existing Telnet path; only Direct pattern playback uses port 81.
-            sock = createDirectSocketForHost(h); directPatternSocket = sock;
-            sock.connect(new InetSocketAddress(h, 81), 2500);
-            sock.setKeepAlive(true);
-            sock.setTcpNoDelay(true);
-            directControllerOnline = true;
-            session = new DirectFluidNcWebSocketSession(sock, h);
-            directPatternWsSession = session;
-            session.discardStartupTraffic();
-            session.sendCommandAndWaitOk("$X");
-            String profileResponse = session.sendCommandAndCollectUntilOk("$I") + "\n"
-                    + session.sendCommandAndCollectUntilOk("$/axes/x/steps_per_mm") + "\n"
-                    + session.sendCommandAndCollectUntilOk("$/axes/y/steps_per_mm");
-            DirectKinematicsProfile kin = directKinematicsFromResponse(profileResponse);
-            session.sendCommandAndWaitOk("G21");
+            // Profile detection and every movement use this one exclusive
+            // connection. This avoids the first session still being released by
+            // FluidNC when the user immediately starts a second pattern.
+            session = new DirectFluidNcSession(h);
+            DirectKinematicsProfile kin = detectDirectKinematics(session);
+            session.command("$X");
+            session.command("G21");
 
             for (int pi=0; pi<paths.length() && !directStopRequested.get(); pi++) {
                 Object item = paths.opt(pi);
@@ -1605,6 +1308,7 @@ public class MainActivity extends Activity {
                     }
                 }
                 directTotal = pts.size(); directPoint = 0;
+                beginDirectFileTiming();
 
                 // Theta is periodic. Shift the entire file by an integer number of
                 // turns so its first angle is nearest the current logical theta.
@@ -1615,24 +1319,20 @@ public class MainActivity extends Activity {
                     thetaOffset = turns * Math.PI * 2.0;
                 }
 
-                final boolean clearFromIn = isDirectClearFromIn(displayName);
-                final boolean clearFromOut = isDirectClearFromOut(displayName);
-                int acknowledgedPoints = 0;
                 int pointIndex = 0;
                 for (double[] pt : pts) {
                     if (directStopRequested.get()) break;
                     while (directPaused.get() && !directStopRequested.get()) Thread.sleep(80);
-                    if (directStopRequested.get()) break;
 
                     double targetTheta = pt[0] + thetaOffset;
-                    double targetRho = directClearRhoTarget(pt[1], directRho, clearFromIn, clearFromOut, pointIndex == 0);
+                    double targetRho = pt[1];
                     double deltaTheta = targetTheta - directTheta;
                     double deltaRho = targetRho - directRho;
 
-                    // Measured ORYN Mini Theta/Rho conversion. Saved live Full
-                    // Circle and Perimeter calibrations remain the only geometry
-                    // scale inputs. Coupling is based on the measured mechanism:
-                    // dYcoupling = -dX * 256 / (6.25 * 210) * rhoDirection.
+                    // EXACT ORYN V9 / Dune-Weaver coupled Theta-Rho mathematics:
+                    // X is the logical theta delta scaled by the saved 360-degree
+                    // calibration. Y contains BOTH the logical rho delta and the
+                    // mechanical coupling compensation caused by theta rotation.
                     double xIncrement = (deltaTheta / (Math.PI * 2.0)) * thetaRevUnits;
                     double yGeometryIncrement = deltaRho * rhoTravelUnits * rhoDirection;
                     double couplingOffset = directCouplingOffset(xIncrement, rhoDirection, kin);
@@ -1645,53 +1345,87 @@ public class MainActivity extends Activity {
                     String g = String.format(java.util.Locale.US,
                             "G91 G21 G1 X%.6f Y%.6f F%.3f",
                             xIncrement, yIncrement, plannedFeed);
-
-                    // Exactly-once relative motion: transmit once, then wait for
-                    // this command's framed real ok/error. Socket read gaps only
-                    // continue waiting; an uncertain movement is NEVER resent.
-                    session.sendCommandAndWaitOk(g);
+                    session.command(g);
 
                     directTheta = targetTheta;
                     directRho = targetRho;
                     directPoint++;
-                    acknowledgedPoints++;
 
-                    // The first point is the physical entry position. Wait for the
-                    // actual entry move to finish before tracing the file itself.
+                    // The first point is the physical entry position. For
+                    // clear_from_out this is the perimeter. Match the Pi V9 core:
+                    // wait for that entry move before preview/progress continues.
                     if (pointIndex == 0 && !directStopRequested.get())
-                        session.waitUntilIdle();
+                        session.awaitIdle();
                     pointIndex++;
                 }
 
                 if (!directStopRequested.get()) {
-                    // Completion is impossible until every parsed THR coordinate
-                    // in this file has received its FluidNC acknowledgement.
-                    if (acknowledgedPoints != pts.size())
-                        throw new java.io.IOException("Direct streamer ended before all THR points were acknowledged");
-                    // After the final coordinate, keep querying on this SAME
-                    // exclusive connection until FluidNC explicitly reports Idle.
-                    session.waitUntilIdle();
+                    session.awaitIdle();
+                    completeDirectFileTiming();
                 }
             }
 
-            // Restore absolute mode only AFTER all THR files and final Idle on the same WebSocket channel.
-            if (!directStopRequested.get()) session.sendCommandAndWaitOk("G90");
+            // Leave FluidNC in a predictable absolute mode for manual terminal use.
+            if (!directStopRequested.get()) session.command("G90");
         } catch (Exception e) {
-            String detail = e.getMessage() == null ? e.toString() : e.getMessage();
-            String file = directCurrentFile == null ? "pattern" : directCurrentFile;
-            directLastError = "Pattern " + file + " stopped at point " + directPoint + "/" + directTotal + ": " + detail;
+            if (!directStopRequested.get()) {
+                String detail = e.getMessage() == null ? e.toString() : e.getMessage();
+                String file = directCurrentFile == null ? "pattern" : directCurrentFile;
+                directLastError = "Pattern " + file + " stopped at point " + directPoint + "/" + directTotal + ": " + detail;
+            }
         }
         finally {
-            if (directPatternWsSession == session) directPatternWsSession = null;
-            if (directPatternSocket == sock) directPatternSocket = null;
-            try { if (session != null) session.close(); else if (sock != null) sock.close(); } catch (Exception ignored) {}
-            releaseDirectPatternRuntimeLocks();
+            if (session != null) session.close();
+            if (directPauseStartedAtMs > 0L) {
+                directPausedAccumulatedMs += Math.max(0L, System.currentTimeMillis() - directPauseStartedAtMs);
+                directPauseStartedAtMs = 0L;
+            }
             directRunning.set(false); directPaused.set(false); directStopRequested.set(false); directCurrentFile = null;
         }
     }
 
-    // Existing non-pattern command sender retained for Home/calibration/manual
-    // actions. Direct pattern playback uses the separate no-abort streamer below.
+    private void beginDirectFileTiming() {
+        directFileStartedAtMs = System.currentTimeMillis();
+        directFileFinishedAtMs = 0L;
+        directPauseStartedAtMs = 0L;
+        directPausedAccumulatedMs = 0L;
+        directLastCompletedSeconds = 0.0;
+    }
+
+    private void completeDirectFileTiming() {
+        directFileFinishedAtMs = System.currentTimeMillis();
+        directLastCompletedSeconds = directElapsedSeconds();
+    }
+
+    private double directElapsedSeconds() {
+        long started = directFileStartedAtMs;
+        if (started <= 0L) return 0.0;
+        long end = directFileFinishedAtMs > 0L ? directFileFinishedAtMs : System.currentTimeMillis();
+        long paused = directPausedAccumulatedMs;
+        if (directPauseStartedAtMs > 0L && directFileFinishedAtMs <= 0L)
+            paused += Math.max(0L, end - directPauseStartedAtMs);
+        return Math.max(0.0, (end - started - paused) / 1000.0);
+    }
+
+    private double directEstimatedRemainingSeconds(double elapsedSeconds) {
+        int current = directPoint;
+        int total = directTotal;
+        if (current <= 0 || total <= 0 || current >= total || elapsedSeconds <= 0.0) return 0.0;
+        return Math.max(0.0, elapsedSeconds * (total - current) / current);
+    }
+
+    private void waitForDirectIdle(OutputStream out, InputStream in, long timeoutMs) throws Exception {
+        long deadline = System.currentTimeMillis() + Math.max(5000L, timeoutMs);
+        while (System.currentTimeMillis() < deadline) {
+            if (directStopRequested.get()) throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
+            out.write('?'); out.flush();
+            String status = readStatusFrame(in, 1200);
+            if (status != null && status.contains("<Idle")) return;
+            Thread.sleep(100);
+        }
+        throw new java.io.IOException("Timed out waiting for FluidNC planner to become Idle");
+    }
+
     private void sendAndWaitOk(OutputStream out, InputStream in, String line) throws Exception {
         sendAndWaitOk(out, in, line, 180000L);
     }
@@ -1711,15 +1445,11 @@ public class MainActivity extends Activity {
                 if (z.contains("error:")) throw new java.io.IOException(sb.toString().trim());
                 if (containsFluidNcOk(z)) return;
             } catch (java.net.SocketTimeoutException timeout) {
-                // Preserve existing non-pattern behavior.
+                // This is normally planner back-pressure, not a lost controller.
+                // Keep waiting while still allowing Stop to interrupt promptly.
             }
         }
         throw new java.io.IOException("FluidNC acknowledgement timed out while motion planner was busy: " + line);
-    }
-
-    private boolean containsFluidNcAlarm(String z) {
-        if (z == null || z.isEmpty()) return false;
-        return z.startsWith("alarm:") || z.contains("\nalarm:") || z.contains("\ralarm:");
     }
 
     private boolean containsFluidNcOk(String z) {
@@ -1731,30 +1461,17 @@ public class MainActivity extends Activity {
     }
 
     private void directRealtime(byte b) {
-        try {
-            DirectFluidNcWebSocketSession ws = directPatternWsSession;
-            if (ws != null) { ws.sendRealtime(b); return; }
-            Socket s = directPatternSocket;
-            if (s != null && s.isConnected() && !s.isClosed()) synchronized (directSocketWriteLock) {
-                s.getOutputStream().write(b); s.getOutputStream().flush();
-            }
-        } catch (Exception ignored) {}
+        try { Socket s = directPatternSocket; if (s != null && s.isConnected() && !s.isClosed()) { s.getOutputStream().write(b); s.getOutputStream().flush(); } } catch (Exception ignored) {}
     }
 
     private void directStop() {
-        directStopRequested.set(true); directPaused.set(false);
-        DirectFluidNcWebSocketSession ws = directPatternWsSession;
-        if (ws != null) {
-            try { ws.sendEmergencyReset(); } catch (Exception ignored) { }
-            try { ws.close(); } catch (Exception ignored) { }
+        if (!directRunning.get() && !directHoming.get()) {
+            directPaused.set(false);
+            directStopRequested.set(false);
             return;
         }
-        try {
-            Socket s = directPatternSocket;
-            if (s != null && s.isConnected() && !s.isClosed()) synchronized (directSocketWriteLock) {
-                s.getOutputStream().write(0x18); s.getOutputStream().flush(); s.close();
-            }
-        } catch (Exception ignored) {}
+        directStopRequested.set(true); directPaused.set(false);
+        try { Socket s = directPatternSocket; if (s != null && s.isConnected() && !s.isClosed()) { s.getOutputStream().write(0x18); s.getOutputStream().flush(); s.close(); } } catch (Exception ignored) {}
     }
 
     private void startDiscoveryAsync() {

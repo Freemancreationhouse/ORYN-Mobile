@@ -1,52 +1,26 @@
-ORYN Android V10.4.1 — Unified Final Direct WebSocket Stream Full Source
-Build marker: ORYN-ANDROID-V10.4.1-DIRECT-WS-STREAM-20260901-4
+ORYN Android V10.4.1 — Direct Playback State Fix
+Build marker: ORYN-ANDROID-V10.4.1-DIRECT-PLAYBACK-STATE-FIX-20260901-1
 
-Base:
-- ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION_STREAMING_CLEAR_FIX_FULL_SOURCE
+Purpose:
+- Offline-first ORYN Android app
+- Raspberry Pi ORYN connection path
+- Direct ESP32 / FluidNC connection path
+- Smart Wi-Fi, current-network and phone-hotspot discovery support
+- Manual IP fallback
+- Direct Full-Circle and Perimeter calibration
+- Direct Theta-Rho playback and live status/preview bridge
+- Automatic Home after successful Direct ESP32 connection
+- Live elapsed and remaining time in the existing player UI
+- Reliable first, second and later pattern session handoff
+- Bundled offline pattern library, Pattern Designer and Pattern Forge
 
-Locked functionality retained:
-- ESP32 FluidNC connection
-- Home Wi-Fi / phone hotspot connection
-- Manual IP connection
-- ORYN Direct — ESP32 FluidNC header
-- Home
-- Full Circle calibration
-- Perimeter calibration
-- Pi support
-- 100 offline patterns
-- Pattern Designer
-- Pattern Forge
-- UI / branding
-- Non-commercial license
+License:
+- ORYN-owned portions: PolyForm Noncommercial License 1.0.0
+- Commercial use requires a separate written commercial license
+- Third-party components remain under their own licenses/terms
 
-Direct ESP32 pattern-motion correction only:
-- one exclusive FluidNC WebSocket motion channel on port 81
-- machine/profile reads performed on the same pattern channel before motion
-- one coordinated relative G91 G21 G1 X/Y command per THR point
-- real ok/error acknowledgement required before next point
-- socket timeout = wait/backpressure, never completion
-- no fixed 15-second Direct playback abort
-- no resend of uncertain relative movement
-- all THR points acknowledged before completion
-- final completion waits for FluidNC <Idle>
-- clear_from_in and clear_from_out use the same streamer
-- no-clear playback uses the same streamer
-- explicit Stop sends realtime Ctrl-X on the active WebSocket channel
+GitHub build artifact:
+ORYN-V10.4.1-direct-playback-state-fix-debug.apk
 
-Measured Mini coupling retained:
-- gear_ratio: 6.25
-- X_steps_per_mm: 256
-- Y_steps_per_mm: 210
-- coupling coefficient: 0.19504761904761905
-- X+ => Y- compensation
-- X+5 => Y coupling approximately -0.9752380952380952
-
-Saved live calibration remains authoritative:
-- thetaRevUnits from saved Full Circle calibration
-- rhoTravelUnits from saved Perimeter calibration
-- rhoDirection from saved calibration/profile state
-
-GitHub APK workflow:
-.github/workflows/build-android-apk.yml
-Artifact APK filename:
-ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_DIRECT_WS_STREAM-debug.apk
+Direct playback: one exclusive framed FluidNC session through final Idle
+Measured Mini coupling: 256 / (6.25 × 210), negative X-to-Y compensation

@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 $Project = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Project
 
-Write-Host "ORYN Android Unified Connection - local APK build" -ForegroundColor Cyan
+Write-Host "ORYN Android Direct Playback State Fix - local APK build" -ForegroundColor Cyan
 
 # Prefer Android Studio's bundled Java when JAVA_HOME is not already valid.
 if (-not $env:JAVA_HOME -or -not (Test-Path (Join-Path $env:JAVA_HOME 'bin\java.exe'))) {
@@ -51,6 +51,6 @@ if ($LASTEXITCODE -ne 0) { throw "Gradle build failed with exit code $LASTEXITCO
 
 $apk = Join-Path $Project 'app\build\outputs\apk\debug\app-debug.apk'
 if (-not (Test-Path $apk)) { throw 'Build completed but APK was not found.' }
-$out = Join-Path $Project 'ORYN-V10.4.1-unified-connection-debug.apk'
+$out = Join-Path $Project 'ORYN-V10.4.1-direct-playback-state-fix-debug.apk'
 Copy-Item $apk $out -Force
 Write-Host "APK ready: $out" -ForegroundColor Green

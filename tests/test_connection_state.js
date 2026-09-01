@@ -7,22 +7,25 @@ function buildContext(init={}, fresh=true){
  class MO{constructor(cb){} observe(){} disconnect(){}}
  class WS{}; WS.CONNECTING=0;WS.OPEN=1;WS.CLOSING=2;WS.CLOSED=3;
  let reloads=0;
+ let homes=[];
  const location={origin:'http://app.oryn',href:'http://app.oryn/',pathname:'/',hostname:'app.oryn',reload(){reloads++;}};
  const OrynAndroid={
    consumeFreshLaunch(){const x=fresh;fresh=false;return x;},
    directStatus(){return JSON.stringify({connected:true,is_running:false,is_homing:false});},
    directProbe(h){return JSON.stringify({ok:true,host:h,response:'FluidNC'});},
+   directHome(...args){homes.push(args);return true;},
    directProbeAsync(h){}, startDiscovery(){}, directListPatterns(){return'[]';}
  };
  const ctx={console,localStorage,sessionStorage,document,location,MutationObserver:MO,NodeFilter:{SHOW_TEXT:4},Node:{},window:null,URL,Response,Headers,Request,fetch:async()=>new Response('{}',{status:200,headers:{'content-type':'application/json'}}),WebSocket:WS,EventTarget,Event,MessageEvent,CloseEvent:global.CloseEvent||class{constructor(type,opts){this.type=type;Object.assign(this,opts)}},setTimeout(){return 1;},clearTimeout(){},setInterval(){return 1;},clearInterval(){},OrynAndroid};
  ctx.window=ctx;ctx.window.OrynAndroid=OrynAndroid;
  ctx.__reloads=()=>reloads;
+ ctx.__homes=()=>homes.slice();
  return ctx;
 }
 const path=require('path');
 const file=path.join(__dirname,'..','app','src','main','assets','www','offline','oryn-mobile-bootstrap.js');
 let code=fs.readFileSync(file,'utf8');
-code=code.replace(/\}\)\(\);\s*$/,"window.__test={ensureOfflineTable,activateDirectTable,localKnownTables,directConfig,mergeDiscovered,directFetch,readDirectSavedRaw};})();");
+code=code.replace(/\}\)\(\);\s*$/,"window.__test={ensureOfflineTable,activateDirectTable,localKnownTables,directConfig,mergeDiscovered,directFetch,readDirectSavedRaw,runPendingDirectAutoHome};})();");
 function evalCtx(ctx){vm.createContext(ctx);vm.runInContext(code,ctx,{filename:'bootstrap.js'});return ctx;}
 function parseTables(c){return JSON.parse(c.localStorage.getItem('orynmotion_tables'));}
 function assert(cond,msg){if(!cond)throw new Error(msg);}
@@ -48,6 +51,11 @@ function assert(cond,msg){if(!cond)throw new Error(msg);}
  assert(d.tables.find(t=>t.id==='oryn-direct-fluidnc').isCurrent===true,'direct is current backend');
  assert(d.tables.find(t=>t.id==='oryn-mobile-offline').isCurrent===false,'offline not current while direct');
  assert(c.localStorage.getItem('oryn_direct_enabled')==='1','direct enabled');
+ assert(c.sessionStorage.getItem('oryn_direct_auto_home_pending_v1')==='10.99.1.146','activation queues one automatic Home');
+ assert(c.__test.runPendingDirectAutoHome(c.__test.directConfig())===true,'pending automatic Home starts');
+ assert(c.__homes().length===1,'automatic Home runs exactly once');
+ assert(c.sessionStorage.getItem('oryn_direct_auto_home_pending_v1')===null,'automatic Home marker is consumed');
+ assert(c.__test.runPendingDirectAutoHome(c.__test.directConfig())===false&&c.__homes().length===1,'reload cannot repeat automatic Home');
  c.__test.ensureOfflineTable(false);
  d=parseTables(c);
  assert(d.activeTableId==='oryn-direct-fluidnc','internal reload preserves direct');
