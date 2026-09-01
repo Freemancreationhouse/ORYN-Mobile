@@ -30,7 +30,9 @@ assert(boot.includes('oryn-home-detect')&&boot.includes('Detect 2.4 GHz Networks
 assert(boot.includes("Using this phone's hotspot?")&&boot.includes('disconnect FluidNC Wi-Fi'),'Same-phone hotspot sequence must be visible in Wi-Fi setup');
 assert(designer.includes("table.id==='oryn-direct-fluidnc'||table.directFluidNC"),'Pattern Designer must accept the active Direct table');
 assert(designer.includes('directNative:true'),'Direct Pattern Designer saves must use the native Android library');
-assert(designer.includes('target&&!target.directNative'),'Only remote Pi targets may use the remote save endpoint');
+assert(designer.includes("window.OrynAndroid.directSavePattern(name,thr)"),'Standalone Pattern Designer must call native Android storage directly');
+assert(designer.includes("if(!data.success)throw new Error"),'Pattern Designer must require an explicit native save success');
+assert(designer.includes("if(!response.ok||!data.success)"),'Remote Pattern Designer saves must also require explicit success');
 
 class Store{constructor(init={}){this.m=new Map(Object.entries(init));}getItem(k){return this.m.has(k)?String(this.m.get(k)):null;}setItem(k,v){this.m.set(k,String(v));}removeItem(k){this.m.delete(k);}}
 const generated=[{path:'custom/Generated Art.thr',native_path:'user/Generated Art.thr',name:'Generated Art',category:'custom',date_modified:1,coordinates_count:3}];
@@ -65,6 +67,30 @@ result=ctx.__test.updateLocalPlaylist({playlist:'Generated',file_name:'Generated
 assert(result.files.length===1,'Generated pattern must not be duplicated through an alias');
 
 (async()=>{
+ let nativeDesignerSave=null,designerFetchCalled=false;
+ const designerMessages=[];
+ const designerSaveSource=designer.slice(designer.indexOf('async function saveToORYNLibrary()'),designer.indexOf('if(saveLibraryBtn)saveLibraryBtn.onclick'));
+ const designerWindow={
+  OrynAndroid:{directSavePattern(name,thr){nativeDesignerSave={name,thr};return JSON.stringify({success:true,path:'custom/'+name+'.thr',name});}},
+  parent:{postMessage(){}},location:{origin:'http://app.oryn'}
+ };
+ const designerCtx={
+  window:designerWindow,location:designerWindow.location,JSON,Error,
+  saveLibraryBtn:{disabled:false},libraryNameEl:{value:'Star 6',focus(){}},state:{path:[[0,0],[1,1]]},isORYNMobile:true,
+  selectedORYNTarget(){return {directNative:true,name:'ORYN Direct — ESP32 FluidNC'};},syncLibraryTarget(){},
+  setSaveMessage(text,kind){designerMessages.push({text,kind});},toThr(){return '0 0\n1 1\n';},setTimeout(){return 1;},
+  async fetch(){designerFetchCalled=true;return new Response('{}',{status:200});}
+ };
+ vm.createContext(designerCtx);vm.runInContext(designerSaveSource+'\nwindow.__saveToORYNLibrary=saveToORYNLibrary;',designerCtx,{filename:'pattern-designer-save.js'});
+ await designerWindow.__saveToORYNLibrary();
+ assert(nativeDesignerSave&&nativeDesignerSave.name==='Star 6','Standalone Direct Pattern Designer must invoke native Android save');
+ assert(!designerFetchCalled,'Standalone Direct Pattern Designer must not use the unpatched page fetch route');
+ assert(designerMessages.some(x=>x.kind==='ok'&&x.text==='Saved: custom/Star 6.thr'),'Designer must show the verified native saved path');
+
+ const catalogResponse=await ctx.__test.directFetch(new URL('http://direct.oryn/list_theta_rho_files_with_metadata'),{method:'GET'});
+ const catalogPayload=await catalogResponse.json();
+ assert(catalogResponse.ok&&catalogPayload.length===101,'Browse must merge saved Android patterns with the 100 bundled patterns');
+ assert(catalogPayload.some(x=>x.path==='custom/Generated Art.thr'),'Browse must expose the saved Android pattern path');
  const saveResponse=await ctx.__test.directFetch(new URL('http://direct.oryn/api/pattern-designer/save'),{method:'POST',body:JSON.stringify({name:'New Design',thr:'0 0\n1 0.5\n2 1\n'})});
  const savePayload=await saveResponse.json();
  assert(saveResponse.ok&&savePayload.success,'Direct Pattern Designer save must succeed');
@@ -76,5 +102,5 @@ assert(result.files.length===1,'Generated pattern must not be duplicated through
  assert(started,'Direct streamer was not invoked for playlist');
  const sequence=JSON.parse(started[1]);
  assert(sequence.length===1&&sequence[0].asset==='user/Generated Art.thr','Playlist must stream the generated native THR file');
- console.log('PASS Android background playback, Activity reattach, Pattern Designer save, and playlist validation');
+ console.log('PASS Android background playback, Activity reattach, native Pattern Designer save, Browse visibility, and playlist validation');
 })();

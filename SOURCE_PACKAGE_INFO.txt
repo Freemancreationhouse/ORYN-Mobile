@@ -1,5 +1,5 @@
 ORYN Android V10.4.1 — Direct Final
-Build marker: ORYN-ANDROID-V10.4.1-DIRECT-FINAL-20260901-1
+Build marker: ORYN-ANDROID-V10.4.1-DIRECT-FINAL-LIBRARY-FIX-20260902-1
 
 Purpose:
 - Offline-first ORYN Android app
@@ -15,7 +15,8 @@ Purpose:
 - Foreground playback when the app is backgrounded or the Android file picker opens
 - Reopened app reattaches to active playback without reconnecting or automatic Home
 - Generated-pattern playlist persistence and Direct playlist playback
-- Pattern Designer Save to ORYN Library for the active Direct ESP32 table
+- Pattern Designer saves directly into native Android ORYN Library storage
+- Browse merges saved Android patterns with the 100 bundled patterns after return/refresh
 - ESP32-side 2.4 GHz Wi-Fi detection and acknowledged FluidNC settings save
 - Bundled offline pattern library, Pattern Designer and Pattern Forge
 

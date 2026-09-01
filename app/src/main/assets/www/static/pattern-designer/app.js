@@ -561,12 +561,24 @@ async function saveToORYNLibrary(){
   if(!state.path.length){setSaveMessage('Generate a valid path first.','error');return;}
   const target=isORYNMobile?selectedORYNTarget():null;
   if(isORYNMobile&&!target){syncLibraryTarget();return;}
-  const endpoint=target&&!target.directNative?String(target.url).replace(/\/$/,'')+'/api/pattern-designer/save':'/api/pattern-designer/save';
   saveLibraryBtn.disabled=true;setSaveMessage(`Saving generated THR${target?' to '+(target.name||'connected ORYN'):''}…`,'busy');
   try{
-    const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,thr:toThr(state.path)})});
-    let data={};try{data=await response.json();}catch(_){ }
-    if(!response.ok)throw new Error(data.detail||`Save failed (${response.status})`);
+    const thr=toThr(state.path);
+    let data={};
+    if(target&&target.directNative){
+      // Pattern Designer is a standalone page and does not load the ORYN
+      // bootstrap fetch router. Call Android storage directly so an HTML shell
+      // response can never be mistaken for a successful pattern save.
+      if(!window.OrynAndroid||typeof window.OrynAndroid.directSavePattern!=='function')throw new Error('Android ORYN Library is unavailable.');
+      const raw=window.OrynAndroid.directSavePattern(name,thr);
+      try{data=typeof raw==='string'?JSON.parse(raw):(raw||{});}catch(_){throw new Error('Android returned an invalid library response.');}
+      if(!data.success)throw new Error(data.detail||'Could not save to Android ORYN Library.');
+    }else{
+      const endpoint=target?String(target.url).replace(/\/$/,'')+'/api/pattern-designer/save':'/api/pattern-designer/save';
+      const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,thr})});
+      try{data=await response.json();}catch(_){throw new Error('ORYN returned an invalid library response.');}
+      if(!response.ok||!data.success)throw new Error(data.detail||`Save failed (${response.status})`);
+    }
     setSaveMessage(`Saved: ${data.path||data.name||name}`,'ok');
     try{window.parent?.postMessage({type:'oryn-pattern-designer-saved',path:data.path,name:data.name},window.location.origin);}catch(_){ }
   }catch(err){

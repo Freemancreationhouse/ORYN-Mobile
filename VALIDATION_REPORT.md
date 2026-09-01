@@ -1,6 +1,6 @@
 # ORYN Android V10.4.1 — Direct Final Validation
 
-Build: `ORYN-ANDROID-V10.4.1-DIRECT-FINAL-20260901-1`
+Build: `ORYN-ANDROID-V10.4.1-DIRECT-FINAL-LIBRARY-FIX-20260902-1`
 
 ## Packaging-time checks
 
@@ -19,8 +19,9 @@ Build: `ORYN-ANDROID-V10.4.1-DIRECT-FINAL-20260901-1`
 - PASS — foreground connected-device service holds CPU and high-performance Wi-Fi locks during motion.
 - PASS — the foreground service is non-sticky, so an uncertain relative movement is never restarted after process death.
 - PASS — generated/native pattern aliases normalize to one canonical `custom/*.thr` playlist entry.
-- PASS — Pattern Designer accepts the active Direct ESP32 table and routes Save to the native Android ORYN Library.
+- PASS — standalone Pattern Designer calls native Android ORYN Library storage directly rather than relying on the parent-page fetch router.
 - PASS — Direct Pattern Designer save invokes native storage and returns its canonical `custom/*.thr` path.
+- PASS — Browse metadata merges a saved Android pattern with all 100 bundled patterns (101 total in the deterministic test).
 - PASS — Direct playlist playback resolves generated patterns to their native `user/*.thr` files.
 - PASS — Wi-Fi setup scans with FluidNC `$WiFi/ListAPs` and shows ESP32-visible 2.4 GHz networks.
 - PASS — all four saved Wi-Fi settings require explicit FluidNC `ok` acknowledgements.

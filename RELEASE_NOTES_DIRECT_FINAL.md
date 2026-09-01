@@ -5,7 +5,8 @@ This final Android source keeps the established ORYN UI, calibration, Pi support
 ## Final corrections
 
 - Pattern Designer now recognizes the active `ORYN Direct — ESP32 FluidNC` table as a native ORYN Library target.
-- **Save to ORYN Library** writes the generated THR through Android storage and returns its canonical `custom/*.thr` path.
+- **Save to ORYN Library** calls Android storage directly from the standalone Designer page, requires an explicit native success response, and returns its canonical `custom/*.thr` path.
+- Browse merges the saved Android patterns with the 100 bundled patterns, so its count becomes 101, 102, and onward after returning or refreshing.
 - Direct running, pause, Home, controller, timer, kinematics and FluidNC socket state now belong to the foreground app process instead of one Activity screen.
 - Reopening ORYN while a pattern is running reattaches to that live session; it does not disconnect, treat the screen as a cold launch, or start automatic Home over the pattern.
 - The foreground service continues the acknowledged FluidNC stream while the app is backgrounded.

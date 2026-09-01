@@ -32,7 +32,7 @@ If the ORYN Activity is recreated while that foreground playback is still active
 
 Generated patterns are stored in playlists using their canonical `custom/*.thr` path. Direct playlist playback resolves those entries to the native Android `user/*.thr` files before starting the same acknowledged streamer.
 
-Pattern Designer now recognizes `ORYN Direct — ESP32 FluidNC` as a valid native library target even though it is the current table. **Save to ORYN Library** writes through the Android bridge and returns the saved `custom/*.thr` entry for browsing and playlists.
+Pattern Designer now recognizes `ORYN Direct — ESP32 FluidNC` as a valid native library target even though it is the current table. Because Pattern Designer is a standalone page, **Save to ORYN Library** calls Android storage directly and requires an explicit native success response. The saved `custom/*.thr` entry is then merged into Browse and playlists; Browse increases from 100 to 101, 102, and onward after returning or refreshing.
 
 This correction is important for clears such as `clear_from_out.thr`: the file contains about 33 spiral revolutions. On the compact coupled mechanism, sending only the logical rho value makes the ball linger near the perimeter and the pattern can fail mechanically after only a few turns. The coupled V9 compensation keeps physical Rho synchronized with the THR path.
 
@@ -71,7 +71,7 @@ Expected result:
 PASS connection-state deterministic tests
 PASS direct coupled motion parity
 PASS Direct auto-home, timer, consecutive-session, Idle, and clear-direction validation
-PASS Android background playback, Activity reattach, Pattern Designer save, and playlist validation
+PASS Android background playback, Activity reattach, native Pattern Designer save, Browse visibility, and playlist validation
 ```
 
 See `VALIDATION_REPORT.md` for the packaging-time checks and the explicit APK-build limitation.
