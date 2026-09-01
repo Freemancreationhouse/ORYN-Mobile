@@ -36,11 +36,11 @@ This correction is important for clears such as `clear_from_out.thr`: the file c
 
 Push this project to the `main` branch. The workflow `.github/workflows/build-android-apk.yml` builds with Android SDK 35, Java 17 and Gradle 8.9. Download the artifact named:
 
-`ORYN-V10.4.1-Direct-Background-Playlist-Fix-APK`
+`ORYN-V10.4.1-Direct-Background-Playlist-WiFi-Fix-APK`
 
 The APK filename inside the artifact is:
 
-`ORYN-V10.4.1-direct-background-playlist-fix-debug.apk`
+`ORYN-V10.4.1-direct-background-playlist-wifi-fix-debug.apk`
 
 ## Upgrade from earlier Direct builds
 

@@ -334,7 +334,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct-background-playlist-fix"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct-background-playlist-wifi-fix"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
@@ -346,6 +346,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void connectDirectWifi(String ssid, String password) { requestDirectWifiConnection(ssid, password); }
         @JavascriptInterface public void disconnectDirectWifi() { runOnUiThread(() -> releaseDirectWifiNetwork()); }
         @JavascriptInterface public String directWifiState() { return getDirectWifiStateJson(); }
+        @JavascriptInterface public String scanFluidNcWifi(String host) { return scanFluidNcWifiNetworks(host); }
         @JavascriptInterface public String configureFluidNcHomeWifi(String host, String ssid, String password) { return configureFluidNcForHomeWifi(host, ssid, password); }
         @JavascriptInterface public void discoverFluidNcLan(String preferredHost) { discoverFluidNcOnLanAsync(preferredHost); }
         @JavascriptInterface public void startDiscovery() { startDiscoveryAsync(); }
@@ -703,20 +704,64 @@ public class MainActivity extends Activity {
 
     private String configureFluidNcForHomeWifi(String rawHost, String rawSsid, String rawPassword) {
         JSONObject out = new JSONObject();
+        Socket sock = null;
         try {
             String ssid = cleanFluidSetting(rawSsid); String password = cleanFluidSetting(rawPassword);
             if (ssid.isEmpty()) throw new IllegalArgumentException("Home Wi-Fi name is required");
+            if (!password.isEmpty() && password.length() < 8) throw new IllegalArgumentException("Wi-Fi password must be at least 8 characters, or empty for an open network");
             String host = normalizeDirectHost(rawHost);
             String[] commands = new String[]{"$Sta/SSID=" + ssid, "$Sta/Password=" + password, "$Sta/IPMode=DHCP", "$WiFi/Mode=STA>AP"};
             JSONArray responses = new JSONArray();
+            // Keep one settings session. FluidNC can reject rapid reconnects,
+            // and a blank reply must never be reported as a successful save.
+            sock = createDirectSocketForHost(host);
+            sock.connect(new InetSocketAddress(host, 23), 3500);
+            sock.setSoTimeout(3500);
+            OutputStream streamOut = sock.getOutputStream(); InputStream streamIn = sock.getInputStream();
+            try { Thread.sleep(100); while (streamIn.available() > 0) streamIn.read(); } catch (Exception ignored) { }
             for (String c : commands) {
-                String r = telnetCommand(host, c, 2500); responses.put(r);
-                if (r.toLowerCase(java.util.Locale.US).contains("error:")) throw new java.io.IOException(r.trim());
+                streamOut.write((c + "\n").getBytes(StandardCharsets.UTF_8)); streamOut.flush();
+                String r = readCommandResponse(streamIn, 3500); responses.put(r);
+                String lower = r.toLowerCase(java.util.Locale.US);
+                if (lower.contains("error:") || !containsFluidNcOk(lower))
+                    throw new java.io.IOException("FluidNC did not acknowledge " + c.substring(0, c.indexOf('=')) + ". Keep the phone connected to the FluidNC AP and retry.");
             }
             out.put("success", true); out.put("responses", responses);
-            out.put("message", "Wi-Fi settings saved to FluidNC. Power-cycle the ESP32; it will join the new router/hotspot and keep its FluidNC AP as fallback.");
+            out.put("ssid", ssid);
+            out.put("message", "Wi-Fi settings verified and saved to FluidNC. Power-cycle the ESP32; it will join the 2.4 GHz network and keep its FluidNC AP as fallback.");
         } catch (Exception e) {
             try { out.put("success", false); out.put("detail", e.getMessage() == null ? e.toString() : e.getMessage()); } catch (Exception ignored) { }
+        } finally {
+            try { if (sock != null) sock.close(); } catch (Exception ignored) { }
+        }
+        return out.toString();
+    }
+
+    private String scanFluidNcWifiNetworks(String rawHost) {
+        JSONObject out = new JSONObject(); JSONArray networks = new JSONArray();
+        try {
+            String response = telnetCommand(normalizeDirectHost(rawHost), "$WiFi/ListAPs", 12000);
+            int first = response.indexOf('{'), last = response.lastIndexOf('}');
+            if (first < 0 || last <= first) throw new java.io.IOException("FluidNC did not return a Wi-Fi scan. Keep the phone connected to the FluidNC AP and retry.");
+            JSONObject payload = new JSONObject(response.substring(first, last + 1));
+            JSONArray source = payload.optJSONArray("AP_LIST");
+            if (source == null) source = payload.optJSONArray("data");
+            if (source != null) {
+                Set<String> seen = new HashSet<>();
+                for (int i=0; i<source.length(); i++) {
+                    JSONObject item = source.optJSONObject(i); if (item == null) continue;
+                    String ssid = item.optString("SSID", "").trim(); if (ssid.isEmpty() || !seen.add(ssid)) continue;
+                    JSONObject n = new JSONObject(); n.put("ssid", ssid);
+                    n.put("signal", item.optInt("SIGNAL", 0));
+                    Object protectedValue = item.opt("IS_PROTECTED");
+                    n.put("secure", "1".equals(String.valueOf(protectedValue)) || Boolean.TRUE.equals(protectedValue));
+                    networks.put(n);
+                }
+            }
+            out.put("success", true); out.put("networks", networks);
+            out.put("message", networks.length() > 0 ? "Networks detected by the ESP32." : "The ESP32 found no 2.4 GHz networks. Enable 2.4 GHz on the router or hotspot and scan again.");
+        } catch (Exception e) {
+            try { out.put("success", false); out.put("networks", networks); out.put("detail", e.getMessage() == null ? e.toString() : e.getMessage()); } catch (Exception ignored) { }
         }
         return out.toString();
     }

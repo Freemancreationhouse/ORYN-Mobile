@@ -1,6 +1,6 @@
 # ORYN Android V10.4.1 — Direct Background + Playlist Fix Validation
 
-Build: `ORYN-ANDROID-V10.4.1-DIRECT-BACKGROUND-PLAYLIST-FIX-20260901-1`
+Build: `ORYN-ANDROID-V10.4.1-DIRECT-BACKGROUND-PLAYLIST-WIFI-FIX-20260901-1`
 
 ## Packaging-time checks
 
@@ -18,6 +18,9 @@ Build: `ORYN-ANDROID-V10.4.1-DIRECT-BACKGROUND-PLAYLIST-FIX-20260901-1`
 - PASS — the foreground service is non-sticky, so an uncertain relative movement is never restarted after process death.
 - PASS — generated/native pattern aliases normalize to one canonical `custom/*.thr` playlist entry.
 - PASS — Direct playlist playback resolves generated patterns to their native `user/*.thr` files.
+- PASS — Wi-Fi setup scans with FluidNC `$WiFi/ListAPs` and shows ESP32-visible 2.4 GHz networks.
+- PASS — all four saved Wi-Fi settings require explicit FluidNC `ok` acknowledgements.
+- PASS — same-phone hotspot setup explains the required disconnect → enable 2.4 GHz hotspot → ESP32 power-cycle order.
 - PASS — X5 measured coupling compensation is approximately Y−0.975238 for X=256, Y=210, gear ratio=6.25.
 - PASS — `clear_from_in` runs Center → Perimeter.
 - PASS — `clear_from_out` runs Perimeter → Center.

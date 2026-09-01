@@ -20,6 +20,10 @@ assert(service.includes('WifiManager.WIFI_MODE_FULL_HIGH_PERF'),'Foreground play
 assert(service.includes('START_NOT_STICKY'),'Killed relative playback must never be restarted/resend uncertain motion');
 assert(manifest.includes('android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE'),'Connected-device foreground permission missing');
 assert(manifest.includes('android:stopWithTask="false"'),'Playback service must survive leaving the app task');
+assert(main.includes('scanFluidNcWifiNetworks')&&main.includes('$WiFi/ListAPs'),'Wi-Fi setup must scan from the ESP32 itself');
+assert(main.includes('!containsFluidNcOk(lower)'),'Wi-Fi setting writes must require real FluidNC acknowledgements');
+assert(boot.includes('oryn-home-detect')&&boot.includes('Detect 2.4 GHz Networks from ESP32'),'Wi-Fi setup must expose ESP32-side 2.4 GHz detection');
+assert(boot.includes("Using this phone's hotspot?")&&boot.includes('disconnect FluidNC Wi-Fi'),'Same-phone hotspot sequence must be visible in Wi-Fi setup');
 
 class Store{constructor(init={}){this.m=new Map(Object.entries(init));}getItem(k){return this.m.has(k)?String(this.m.get(k)):null;}setItem(k,v){this.m.set(k,String(v));}removeItem(k){this.m.delete(k);}}
 const generated=[{path:'custom/Generated Art.thr',native_path:'user/Generated Art.thr',name:'Generated Art',category:'custom',date_modified:1,coordinates_count:3}];
