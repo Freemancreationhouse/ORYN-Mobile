@@ -1,84 +1,81 @@
-# ORYN Android V10.4.1 — Unified Final Measured Motion Validation
+# ORYN Android V10.4.1 — Direct ESP32 Persistent Streaming + Clear Direction Fix Validation
 
-Build: `ORYN-ANDROID-V10.4.1-UNIFIED-FINAL-MEASURED-MOTION-20260901-1`
+Build: `ORYN-ANDROID-V10.4.1-DIRECT-PERSISTENT-STREAM-CLEAR-20260901-3`
 
 ## Scope lock
 
-Only the Android **Direct ESP32 / FluidNC pattern-motion path** was changed. The existing Offline/Pi paths, Wi-Fi and hotspot connection flow, manual IP, Home UI/action, Full Circle calibration, Perimeter calibration, 100-pattern library, Pattern Designer, Pattern Forge, branding/UI assets, and PolyForm Noncommercial license were retained from the uploaded base.
+Only the Android Direct ESP32 / FluidNC pattern-motion path was changed. The locked visual UI bundle is unchanged; one offline Direct bridge mapping was corrected so the existing clear-mode values reach the correct bundled THR clear files. Existing Pi support, connection flows, Home, calibration UI/actions, 100-pattern library, Pattern Designer, Pattern Forge, branding, and license remain preserved.
+
+One additional normal Android permission, `WAKE_LOCK`, is present only so the app can hold Direct pattern Wi-Fi/CPU execution while a pattern is actively streaming. It does not change Wi-Fi selection or connection behavior.
 
 ## Measured Mini coupling
 
-Confirmed Direct Mini constants used by the motion core:
+- gear ratio: `6.25`
+- X steps/mm: `256`
+- Y steps/mm: `210`
+- coupling: `256 / (6.25 × 210) = 0.19504761904761905`
+- X+ requires Y- compensation; X- requires Y+ compensation.
+- `X +5` produces coupling Y `-0.9752380952380952` before logical rho contribution.
 
-- `gear_ratio = 6.25`
-- `X_steps_per_mm = 256`
-- `Y_steps_per_mm = 210`
-- `coupling = 256 / (6.25 × 210) = 0.19504761904761905`
-- X positive requires Y negative compensation.
-- X negative requires Y positive compensation.
+Saved live Full Circle / Perimeter calibration remains authoritative through `thetaRevUnits`, `rhoTravelUnits`, and `rhoDirection`; those values are not hardcoded.
 
-Static calculation:
+## Persistent Direct FluidNC streamer
 
-- `X +5.000000` → coupling Y = `-0.9752380952380952`
-- `X -5.000000` → coupling Y = `+0.9752380952380952`
+PASS — one exclusive Telnet socket owns the complete clear + pattern sequence.
 
-The Full Circle and Perimeter geometry values are **not hardcoded**. Playback continues to receive and use the saved live values passed as `thetaRevUnits`, `rhoTravelUnits`, and `rhoDirection`.
+PASS — one persistent reader thread frames all FluidNC line acknowledgements and `<...>` status frames for the life of that socket.
 
-## Direct THR conversion
+PASS — fragmented acknowledgement bytes such as `o` followed later by `k\r\n` are reconstructed as one real `ok`.
 
-For each logical THR delta, the Android native streamer uses:
+PASS — incoming Telnet IAC negotiation bytes are stripped before parsing and cannot corrupt `ok`/`error` tokens.
 
-- `dX = deltaTheta / (2π) × savedThetaRevolutionUnits`
-- `dY_radial = deltaRho × savedRhoTravelUnits × savedRhoDirection`
-- `dY_coupling = -dX × X_steps_per_mm / (6.25 × Y_steps_per_mm) × savedRhoDirection`
-- `dY = dY_radial + dY_coupling`
+PASS — `TCP_NODELAY` and TCP keepalive are enabled on the Direct motion socket.
 
-and sends one coordinated relative command:
+PASS — Android Direct pattern playback holds high-performance Wi-Fi and a partial CPU wake lock only while streaming.
 
-`G91 G21 G1 X... Y... F...`
-
-## Streaming validation
-
-PASS — one persistent Direct FluidNC motion socket is used for the clear + pattern sequence.
-
-PASS — every relative THR command is sent exactly once and then waits for its real FluidNC `ok` or `error`/`ALARM` result.
-
-PASS — socket read timeout is treated as waiting/back-pressure, not completion.
-
-PASS — the Direct pattern streamer contains no 15-second acknowledgement abort and no acknowledgement deadline.
+PASS — each coordinated relative command is transmitted once, then waits for its real `ok`/`error`/alarm. Socket read timeout is waiting/backpressure, never completion.
 
 PASS — an uncertain relative movement is never resent.
 
-PASS — every parsed THR coordinate must be acknowledged before the file can complete.
+PASS — there is no 15-second abort or acknowledgement deadline in the Direct pattern streamer.
 
-PASS — after the final coordinate, ORYN repeatedly queries FluidNC until an explicit `<Idle...>` status is received.
+PASS — every parsed THR point must be acknowledged before that file may complete.
 
-PASS — only after `<Idle>` does the sequence restore `G90` and leave the running state.
+PASS — after the final coordinate, the same socket repeatedly queries FluidNC until an explicit `<Idle...>` frame is received; only then is the file complete.
 
-## Clear validation
+## Clear direction
 
-Both clear patterns are sent through the exact same `runDirectPattern` streamer as normal THR patterns.
+- `clear_from_in.thr`: 3449 points; rho is constrained Center → Perimeter.
+- `clear_from_out.thr`: 3447 points; rho is constrained Perimeter → Center.
+- Both use the same persistent streamer as normal THR playback.
+- UI `clear_from_out` maps to `clear_from_out.thr` (legacy `from_perimeter` also accepted).
+- UI `clear_from_in` maps to `clear_from_in.thr` (legacy `from_center` also accepted).
+- `clear_from_out.thr` is inserted before the selected drawing pattern, so From Perimeter cannot silently skip clearing and jump to the drawing pattern start.
+- Bundled THR files were not rewritten.
 
-- `clear_from_in.thr`: 3449 points; first rho = `0`; final rho = `1`. The first point establishes Center, then Direct playback prevents tiny rounding reversals so rho progresses Center → Perimeter.
-- `clear_from_out.thr`: 3447 points; first rho = `1`; final rho = `0.001`. The first point establishes Perimeter, then Direct playback prevents tiny rounding reversals so rho progresses Perimeter → Center.
+## Included tests
 
-No bundled THR file was rewritten.
-
-## Automated checks included
-
-GitHub Actions runs these before APK compilation:
+GitHub Actions runs:
 
 - `tests/test_connection_state.js`
 - `tests/test_direct_coupled_motion.js`
 - `tests/test_direct_clear_progression.js`
+- `tests/test_direct_ack_framing.js`
 - `tests/test_direct_streamer_static.js`
+- `tests/test_direct_clear_mode_bridge.js`
 
-All four checks pass in this source package.
+All tests pass in this source package.
 
-## Build workflow
+## Integrity checks
 
-`.github/workflows/build-android-apk.yml` builds with Java 17, Android SDK 35, Gradle 8.9, and Android Gradle Plugin 8.7.3, then uploads:
+PASS — locked compiled UI bundle, Pattern Designer, Pattern Forge, catalog, previews, and THR assets are unchanged. Only `offline/oryn-mobile-bootstrap.js` Direct clear-mode routing changed.
 
-`ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION-debug.apk`
+PASS — offline catalog contains 100 patterns.
 
-The current workspace does not include a local Android SDK/Gradle installation, so no local APK binary is claimed here; the complete GitHub Actions APK workflow is included and statically validated.
+PASS — `LICENSE`, `NOTICE.md`, Gradle build configuration, settings, and properties are unchanged.
+
+## APK workflow
+
+`.github/workflows/build-android-apk.yml` includes validation and a debug APK build using Java 17, Android SDK 35, Gradle 8.9, and AGP 8.7.3.
+
+Artifact filename: `ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION_STREAMING_CLEAR_FIX-debug.apk`

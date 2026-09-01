@@ -1,37 +1,55 @@
-ORYN Android V10.4.1 — Unified Final Measured Motion Full Source
-Build marker: ORYN-ANDROID-V10.4.1-UNIFIED-FINAL-MEASURED-MOTION-20260901-1
+ORYN Android V10.4.1 — Unified Final Measured Motion Streaming + Clear Fix Full Source
+Build marker: ORYN-ANDROID-V10.4.1-DIRECT-PERSISTENT-STREAM-CLEAR-20260901-3
 
 Base:
-- Uploaded ORYN_ANDROID_V10_4_1_UNIFIED_MOTION_PARITY_FULL_SOURCE(1).zip
+- ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION_FULL_SOURCE
 
 Scope:
 - Full Android source package
-- Only Direct ESP32 / FluidNC pattern-motion internals corrected
-- Existing Offline and Raspberry Pi support retained
-- Existing Wi-Fi / hotspot / manual-IP paths retained
-- Existing Home and calibration surfaces retained
-- Existing 100 offline pattern catalog retained
-- Existing Pattern Designer and Pattern Forge retained
-- Existing ORYN UI/branding retained
+- Direct ESP32 / FluidNC pattern-motion streaming internals corrected only
+- Locked visual UI retained; Direct offline bridge clear-mode routing corrected only
+- Pi support retained
+- ESP32/Home Wi-Fi/hotspot/manual-IP connection behavior retained
+- Home and calibration behavior retained
+- 100 offline patterns retained
+- Pattern Designer and Pattern Forge retained
+- ORYN branding retained
+- Existing non-commercial license retained
 
-Measured Direct Mini coupling:
+Measured Mini coupling:
 - gear_ratio: 6.25
 - X_steps_per_mm: 256
 - Y_steps_per_mm: 210
 - coupling coefficient: 0.19504761904761905
 - X+ => Y- compensation
+- X+5 => Y coupling approximately -0.9752380952380952
 
 Saved live calibration remains authoritative:
 - thetaRevUnits from saved Full Circle calibration
 - rhoTravelUnits from saved Perimeter calibration
 - rhoDirection from saved calibration/profile state
 
+Direct streaming correction:
+- one exclusive FluidNC Telnet motion socket
+- persistent framed response reader
+- Telnet IAC filtering
+- fragmented ok reconstruction
+- socket timeout = wait/backpressure, never completion
+- exactly-once relative command transmission
+- no fixed Direct acknowledgement abort
+- all THR points acknowledged before completion
+- final completion gated by explicit FluidNC <Idle>
+- TCP keepalive + TCP_NODELAY
+- Direct-pattern-only Wi-Fi/CPU runtime hold
+
 GitHub APK workflow:
 .github/workflows/build-android-apk.yml
 Artifact APK filename:
-ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION-debug.apk
+ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION_STREAMING_CLEAR_FIX-debug.apk
 
-License:
-- ORYN-owned portions: PolyForm Noncommercial License 1.0.0
-- Commercial use requires a separate written commercial license
-- Third-party components remain under their own licenses/terms
+Direct clear-mode correction:
+- UI clear_from_out -> clear_from_out.thr (From Perimeter)
+- UI clear_from_in -> clear_from_in.thr (From Center)
+- legacy from_perimeter/from_center aliases retained
+- clear_from_out starts at rho=1 and progresses inward
+- clear_from_in starts at rho=0 and progresses outward

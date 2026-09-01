@@ -41,18 +41,20 @@ jobs:
         run: |
           node tests/test_connection_state.js
           node tests/test_direct_coupled_motion.js
+          node tests/test_direct_ack_framing.js
           node tests/test_direct_clear_progression.js
           node tests/test_direct_streamer_static.js
+          node tests/test_direct_clear_mode_bridge.js
 
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION_STREAMING_CLEAR_FIX-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ORYN-V10.4.1-Unified-Final-Measured-Motion-APK
-          path: ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION-debug.apk
+          name: ORYN-V10.4.1-Measured-Motion-Streaming-Clear-Fix-APK
+          path: ORYN_ANDROID_V10_4_1_UNIFIED_FINAL_MEASURED_MOTION_STREAMING_CLEAR_FIX-debug.apk
           if-no-files-found: error

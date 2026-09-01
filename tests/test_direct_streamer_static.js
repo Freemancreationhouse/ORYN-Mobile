@@ -9,35 +9,51 @@ function between(a,b){
   const j=java.indexOf(b,i+1); if(j<0) throw new Error(`Missing end ${b}`);
   return java.slice(i,j);
 }
-const run=between('private void runDirectPattern(', 'private void waitForDirectIdle(');
-const idle=between('private void waitForDirectIdle(', 'private void sendAndWaitOk(');
-const ack=between('private void sendDirectPatternAndWaitOk(', 'private boolean containsFluidNcAlarm(');
+const session=between('private final class DirectFluidNcSession', 'private void runDirectPattern(');
+const run=between('private void runDirectPattern(', '// Existing non-pattern command sender retained');
+const directStreamer=session+run;
 
-// No fixed 15-second / acknowledgement deadline in Direct pattern playback.
-const streamer=run+idle+ack;
-for(const bad of ['15000','15.0s','acknowledgementDeadline','acknowledgement timed out']) {
-  if(streamer.includes(bad)) throw new Error(`Fixed abort remains in Direct streamer: ${bad}`);
+// No fixed 15-second / acknowledgement deadline in Direct playback.
+for(const bad of ['15000','15.0s','acknowledgementDeadlineMs','acknowledgement timed out while motion planner was busy']) {
+  if(directStreamer.includes(bad)) throw new Error(`Fixed abort remains in Direct streamer: ${bad}`);
 }
-if(!ack.includes('while (true)')) throw new Error('Acknowledgement wait is not unbounded');
-if(!ack.includes('catch (java.net.SocketTimeoutException timeout)')) throw new Error('Socket timeout handling missing');
-if(!ack.includes('Never treat it as completion') || !ack.includes('never resend')) throw new Error('Timeout/backpressure exactly-once rule missing');
-if((run.match(/sendDirectPatternAndWaitOk\(out, in, g\);/g)||[]).length!==1) throw new Error('Relative THR command must be sent exactly once per point');
+if(!session.includes('BlockingQueue<String> lineReplies')) throw new Error('Persistent framed reply queue missing');
+if(!session.includes('BlockingQueue<String> statusFrames')) throw new Error('Persistent status-frame queue missing');
+if(!session.includes('catch (java.net.SocketTimeoutException timeout) { continue; }')) throw new Error('Reader timeout must continue waiting');
+if(!session.includes('line.toString().trim().equalsIgnoreCase("ok")')) throw new Error('Standalone fragmented ok framing missing');
+if(!session.includes('if (ub == 255) { telnetState = 1; continue; }')) throw new Error('Telnet IAC filtering missing');
+if(!session.includes('while (true)')) throw new Error('Unbounded Direct acknowledgement/Idle wait missing');
+if(!session.includes('lineReplies.poll(500, TimeUnit.MILLISECONDS)')) throw new Error('Backpressure poll loop missing');
+if(!session.includes('if (z.equals("ok")) return;')) throw new Error('Real ok acknowledgement gate missing');
+if(!session.includes('statusFrames.poll(150, TimeUnit.MILLISECONDS)')) throw new Error('Status frame Idle polling missing');
+if(!session.includes('if (z.contains("<idle")) return;')) throw new Error('FluidNC Idle completion gate missing');
+if(!run.includes('sock.setTcpNoDelay(true)')) throw new Error('TCP_NODELAY missing');
+if(!run.includes('sock.setKeepAlive(true)')) throw new Error('TCP keepalive missing');
+if(!run.includes('acquireDirectPatternRuntimeLocks()')) throw new Error('Direct runtime Wi-Fi/CPU hold missing');
+if(!run.includes('releaseDirectPatternRuntimeLocks()')) throw new Error('Direct runtime lock release missing');
+if((run.match(/createDirectSocketForHost\(h\)/g)||[]).length!==1) throw new Error('Pattern streamer should own exactly one socket');
+if((run.match(/session\.sendCommandAndWaitOk\(g\);/g)||[]).length!==1) throw new Error('Relative THR command must be sent exactly once per point');
 if(!run.includes('if (acknowledgedPoints != pts.size())')) throw new Error('All-point completion invariant missing');
 if(!run.includes('acknowledgedPoints++;')) throw new Error('Acknowledged point counter missing');
-if(!idle.includes('while (true)')) throw new Error('Final Idle wait still has a deadline');
-if(!idle.includes('if (z.contains("<idle")) return;')) throw new Error('FluidNC <Idle> completion gate missing');
-if(!idle.includes("out.write('?')")) throw new Error('FluidNC status polling missing');
-if(!run.includes('sock.setKeepAlive(true)')) throw new Error('Motion socket TCP keepalive missing');
-if((run.match(/createDirectSocketForHost\(h\)/g)||[]).length!==1) throw new Error('Pattern streamer should own exactly one motion socket');
+if(!run.includes('session.waitUntilIdle();')) throw new Error('Final Idle wait missing');
+if(!run.includes('"G91 G21 G1 X%.6f Y%.6f F%.3f"')) throw new Error('Coordinated relative G91/G21 XY command missing');
+if(run.includes('sendDirectPatternAndWaitOk')) throw new Error('Old raw chunk acknowledgement reader still used');
 
-// Final per-file sequence must verify all points, then wait Idle. Final G90 must happen after the sequence.
 const idxAll=run.indexOf('if (acknowledgedPoints != pts.size())');
-const idxIdle=run.indexOf('waitForDirectIdle(out, in);',idxAll);
-const idxG90=run.indexOf('sendDirectPatternAndWaitOk(out, in, "G90")');
+const idxIdle=run.indexOf('session.waitUntilIdle();',idxAll);
+const idxG90=run.indexOf('session.sendCommandAndWaitOk("G90")');
 if(!(idxAll>=0 && idxIdle>idxAll && idxG90>idxIdle)) throw new Error('Completion order is not all-points -> Idle -> G90');
 
-// Pattern formula must remain coordinated relative XY.
-if(!run.includes('"G91 G21 G1 X%.6f Y%.6f F%.3f"')) throw new Error('Coordinated relative G91/G21 XY command missing');
-
-console.log('PASS Direct ESP32 streamer static validation');
-console.log(JSON.stringify({no15SecondAbort:true,timeoutIsBackpressure:true,allPointsBeforeComplete:true,finalIdleGate:true,oneMotionSocket:true},null,2));
+console.log('PASS Direct ESP32 persistent FluidNC streamer static validation');
+console.log(JSON.stringify({
+  no15SecondAbort:true,
+  persistentReplyFraming:true,
+  telnetNegotiationFiltered:true,
+  timeoutIsBackpressure:true,
+  exactlyOnceRelativeMove:true,
+  allPointsBeforeComplete:true,
+  finalIdleGate:true,
+  oneMotionSocket:true,
+  tcpNoDelay:true,
+  runtimeWifiCpuHold:true
+},null,2));

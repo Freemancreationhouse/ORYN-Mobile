@@ -327,8 +327,14 @@ async function directFetch(u,init={}){
   const x=patternEntry(b.file_name);if(!x)return errResponse('Pattern is not available in the local ORYN library.',404);
   const seq=[];if(b.pre_execution&&b.pre_execution!=='none'){
     let clearName=null;const st=directBridgeJson('directStatus')||{};
-    if(b.pre_execution==='from_center')clearName='clear_from_in.thr'; else if(b.pre_execution==='from_perimeter')clearName='clear_from_out.thr';
-    else if(b.pre_execution==='adaptive')clearName=(Number(st.rho||0)>=0.5?'clear_from_out.thr':'clear_from_in.thr');
+    // The locked ORYN UI uses clear_from_in / clear_from_out / clear_sideway.
+    // Keep the older from_center / from_perimeter aliases too, but never let a
+    // Direct clear choice silently fall through and start the drawing pattern.
+    const clearMode=String(b.pre_execution||'');
+    if(clearMode==='clear_from_in'||clearMode==='from_center')clearName='clear_from_in.thr';
+    else if(clearMode==='clear_from_out'||clearMode==='from_perimeter')clearName='clear_from_out.thr';
+    else if(clearMode==='clear_sideway')clearName='clear_sideway.thr';
+    else if(clearMode==='adaptive')clearName=(Number(st.rho||0)>=0.5?'clear_from_out.thr':'clear_from_in.thr');
     const c=clearName&&patternEntry(clearName);if(c)seq.push({asset:c.native_path||c.thr_url.replace(/^\//,''),display:c.path||clearName});
   }
   seq.push({asset:x.native_path||x.thr_url.replace(/^\//,''),display:x.path||String(b.file_name||'pattern.thr')});

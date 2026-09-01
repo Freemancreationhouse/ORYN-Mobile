@@ -20,6 +20,7 @@ import android.os.Bundle;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.provider.Settings;
 import android.util.Base64;
 import android.webkit.JavascriptInterface;
@@ -68,6 +69,9 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -114,6 +118,11 @@ public class MainActivity extends Activity {
     private final AtomicBoolean directHoming = new AtomicBoolean(false);
     private volatile boolean directControllerOnline = false;
     private volatile Socket directPatternSocket;
+    private final Object directSocketWriteLock = new Object();
+    private volatile WifiManager.WifiLock directMotionWifiLock;
+    private volatile PowerManager.WakeLock directMotionWakeLock;
+    private volatile String directLastTx = "";
+    private volatile String directLastRx = "";
     private volatile String directLastError = "";
     private volatile String directCurrentFile = null;
     private volatile int directPoint = 0;
@@ -418,6 +427,7 @@ public class MainActivity extends Activity {
                 o.put("x_steps_per_mm", directXStepsPerMm); o.put("y_steps_per_mm", directYStepsPerMm);
                 o.put("gear_ratio", directGearRatio); o.put("coupling_sign", directCouplingSign);
                 o.put("machine_name", directMachineName);
+                o.put("last_tx", directLastTx); o.put("last_rx", directLastRx);
             } catch (Exception ignored) {}
             return o.toString();
         }
@@ -1138,8 +1148,216 @@ public class MainActivity extends Activity {
         return result.toString();
     }
 
+    private void acquireDirectPatternRuntimeLocks() {
+        // Keep Android from power-throttling a long local FluidNC stream. These
+        // locks exist only while Direct pattern playback is active; they do not
+        // alter Wi-Fi selection, Pi support, or normal app networking.
+        try {
+            if (wifiManager != null) {
+                WifiManager.WifiLock lock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "ORYN:DirectPatternWifi");
+                lock.setReferenceCounted(false);
+                lock.acquire();
+                directMotionWifiLock = lock;
+            }
+        } catch (Exception ignored) { directMotionWifiLock = null; }
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                PowerManager.WakeLock lock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ORYN:DirectPatternCpu");
+                lock.setReferenceCounted(false);
+                lock.acquire();
+                directMotionWakeLock = lock;
+            }
+        } catch (Exception ignored) { directMotionWakeLock = null; }
+    }
+
+    private void releaseDirectPatternRuntimeLocks() {
+        try { WifiManager.WifiLock lock = directMotionWifiLock; if (lock != null && lock.isHeld()) lock.release(); } catch (Exception ignored) { }
+        directMotionWifiLock = null;
+        try { PowerManager.WakeLock lock = directMotionWakeLock; if (lock != null && lock.isHeld()) lock.release(); } catch (Exception ignored) { }
+        directMotionWakeLock = null;
+    }
+
+    /**
+     * One persistent FluidNC Telnet reader for the complete Direct clear + pattern
+     * sequence. The old implementation read arbitrary TCP chunks directly inside
+     * each command wait. A valid "ok" could therefore be fragmented or mixed with
+     * Telnet/status traffic and leave Android waiting while FluidNC had already
+     * become Idle. This reader frames protocol replies once and never reads ahead
+     * in a command-specific loop.
+     */
+    private final class DirectFluidNcSession implements AutoCloseable {
+        private final Socket socket;
+        private final InputStream input;
+        private final OutputStream output;
+        private final BlockingQueue<String> lineReplies = new LinkedBlockingQueue<>();
+        private final BlockingQueue<String> statusFrames = new LinkedBlockingQueue<>();
+        private final AtomicBoolean closed = new AtomicBoolean(false);
+        private volatile Exception readerFailure;
+        private final Thread readerThread;
+
+        DirectFluidNcSession(Socket socket) throws Exception {
+            this.socket = socket;
+            this.input = socket.getInputStream();
+            this.output = socket.getOutputStream();
+            this.readerThread = new Thread(this::readerLoop, "ORYN-FluidNC-DirectReader");
+            this.readerThread.setDaemon(true);
+            this.readerThread.start();
+        }
+
+        private void offerLine(StringBuilder line) {
+            String text = line.toString().trim();
+            line.setLength(0);
+            if (text.isEmpty()) return;
+            directLastRx = text;
+            lineReplies.offer(text);
+        }
+
+        private void readerLoop() {
+            StringBuilder line = new StringBuilder();
+            StringBuilder status = new StringBuilder();
+            boolean inStatus = false;
+            int telnetState = 0; // 0=data, 1=IAC, 2=IAC option, 3=SB, 4=SB-IAC
+            byte[] buf = new byte[512];
+            try {
+                while (!closed.get()) {
+                    int n;
+                    try { n = input.read(buf); }
+                    catch (java.net.SocketTimeoutException timeout) { continue; }
+                    if (n < 0) throw new java.io.EOFException("FluidNC connection closed");
+                    for (int i = 0; i < n; i++) {
+                        int ub = buf[i] & 0xff;
+
+                        // Strip Telnet IAC negotiation bytes so they can never
+                        // corrupt a real FluidNC "ok"/"error" line.
+                        if (telnetState != 0) {
+                            if (telnetState == 1) {
+                                if (ub == 255) { telnetState = 0; continue; }
+                                if (ub == 250) { telnetState = 3; continue; }
+                                if (ub >= 251 && ub <= 254) { telnetState = 2; continue; }
+                                telnetState = 0; continue;
+                            }
+                            if (telnetState == 2) { telnetState = 0; continue; }
+                            if (telnetState == 3) { if (ub == 255) telnetState = 4; continue; }
+                            if (telnetState == 4) { telnetState = (ub == 240) ? 0 : 3; continue; }
+                        }
+                        if (ub == 255) { telnetState = 1; continue; }
+
+                        char ch = (char) ub;
+                        if (inStatus) {
+                            status.append(ch);
+                            if (ch == '>') {
+                                String frame = status.toString().trim();
+                                status.setLength(0); inStatus = false;
+                                if (!frame.isEmpty()) { directLastRx = frame; statusFrames.offer(frame); }
+                            }
+                            continue;
+                        }
+                        if (ch == '<') {
+                            if (line.length() > 0) offerLine(line);
+                            inStatus = true; status.setLength(0); status.append(ch);
+                            continue;
+                        }
+                        if (ch == '\r' || ch == '\n') {
+                            if (line.length() > 0) offerLine(line);
+                            continue;
+                        }
+                        if (ub >= 0x20 && ub != 0x7f) {
+                            line.append(ch);
+                            // FluidNC normally terminates ok with CR/LF, but accept
+                            // the complete standalone token immediately too. This
+                            // covers Telnet stacks that deliver CR separately/later.
+                            if (line.toString().trim().equalsIgnoreCase("ok")) offerLine(line);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                if (!closed.get()) readerFailure = e;
+            } finally {
+                if (line.length() > 0) offerLine(line);
+            }
+        }
+
+        private void checkTransport() throws Exception {
+            if (directStopRequested.get()) throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
+            if (readerFailure != null) throw readerFailure;
+            if (socket.isClosed() || !socket.isConnected()) throw new java.io.EOFException("FluidNC connection closed");
+        }
+
+        void sendCommandAndWaitOk(String command) throws Exception {
+            checkTransport();
+            directLastTx = command;
+            byte[] bytes = (command + "\n").getBytes(StandardCharsets.UTF_8);
+            // Exactly one line transmission. If its acknowledgement is delayed,
+            // keep waiting forever (unless Stop/error/disconnect); never resend.
+            synchronized (directSocketWriteLock) {
+                output.write(bytes);
+                output.flush();
+            }
+            while (true) {
+                checkTransport();
+                // Status frames are asynchronous. Alarm is fatal, but Idle/Run
+                // can never substitute for this command's required real "ok".
+                String asyncStatus = statusFrames.poll();
+                if (asyncStatus != null) {
+                    String zs = asyncStatus.toLowerCase(java.util.Locale.US);
+                    if (zs.contains("<alarm") || containsFluidNcAlarm(zs) || zs.contains("error:"))
+                        throw new java.io.IOException(asyncStatus);
+                }
+                String reply = lineReplies.poll(500, TimeUnit.MILLISECONDS);
+                if (reply == null) continue; // backpressure / socket gap, not completion
+                String z = reply.trim().toLowerCase(java.util.Locale.US);
+                if (z.equals("ok")) return;
+                if (containsFluidNcAlarm(z) || z.startsWith("error:") || z.contains("\nerror:"))
+                    throw new java.io.IOException(reply);
+                // Command echo, banner and [MSG:...] lines are informational.
+            }
+        }
+
+        void waitUntilIdle() throws Exception {
+            while (true) {
+                checkTransport();
+                // Discard only old status frames; an outstanding relative command
+                // is never present here because sendCommandAndWaitOk already got ok.
+                statusFrames.clear();
+                directLastTx = "?";
+                synchronized (directSocketWriteLock) {
+                    output.write('?');
+                    output.flush();
+                }
+                long nextQuery = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1400);
+                while (System.nanoTime() < nextQuery) {
+                    checkTransport();
+                    String frame = statusFrames.poll(150, TimeUnit.MILLISECONDS);
+                    if (frame != null) {
+                        String z = frame.toLowerCase(java.util.Locale.US);
+                        if (z.contains("<idle")) return;
+                        if (containsFluidNcAlarm(z) || z.contains("error:")) throw new java.io.IOException(frame);
+                        break; // Run/Jog/Hold: ask again after a short interval.
+                    }
+                    String line = lineReplies.poll();
+                    if (line != null) {
+                        String z = line.trim().toLowerCase(java.util.Locale.US);
+                        if (containsFluidNcAlarm(z) || z.startsWith("error:")) throw new java.io.IOException(line);
+                        // No command is outstanding here, so informational/stray ok
+                        // cannot acknowledge any future movement and is discarded.
+                    }
+                }
+                Thread.sleep(100);
+            }
+        }
+
+        @Override public void close() {
+            if (!closed.compareAndSet(false, true)) return;
+            try { socket.close(); } catch (Exception ignored) { }
+            try { readerThread.interrupt(); } catch (Exception ignored) { }
+        }
+    }
+
     private void runDirectPattern(String host, String assetPathsJson, double thetaRevUnits, double rhoTravelUnits, double rhoDirection, double feed) {
         Socket sock = null;
+        DirectFluidNcSession session = null;
+        acquireDirectPatternRuntimeLocks();
         try {
             JSONArray paths = new JSONArray(assetPathsJson);
             String h = normalizeDirectHost(host);
@@ -1151,14 +1369,14 @@ public class MainActivity extends Activity {
             sock = createDirectSocketForHost(h); directPatternSocket = sock;
             sock.connect(new InetSocketAddress(h, 23), 2500);
             sock.setKeepAlive(true);
-            // A short SO_TIMEOUT is only a read heartbeat. Socket timeout means
-            // planner back-pressure / still waiting; it is NEVER completion.
-            sock.setSoTimeout(2000);
+            sock.setTcpNoDelay(true);
+            // SO_TIMEOUT is only the persistent reader heartbeat. A timeout is
+            // waiting/backpressure and never ends or acknowledges pattern motion.
+            sock.setSoTimeout(1000);
             directControllerOnline = true;
-            OutputStream out = sock.getOutputStream(); InputStream in = sock.getInputStream();
-            try { Thread.sleep(100); while (in.available() > 0) in.read(); } catch (Exception ignored) {}
-            sendDirectPatternAndWaitOk(out, in, "$X");
-            sendDirectPatternAndWaitOk(out, in, "G21");
+            session = new DirectFluidNcSession(sock);
+            session.sendCommandAndWaitOk("$X");
+            session.sendCommandAndWaitOk("G21");
 
             for (int pi=0; pi<paths.length() && !directStopRequested.get(); pi++) {
                 Object item = paths.opt(pi);
@@ -1235,19 +1453,19 @@ public class MainActivity extends Activity {
                             xIncrement, yIncrement, plannedFeed);
 
                     // Exactly-once relative motion: transmit once, then wait for
-                    // that command's real ok/error. A read timeout only continues
-                    // waiting; this command is NEVER resent after uncertainty.
-                    sendDirectPatternAndWaitOk(out, in, g);
+                    // this command's framed real ok/error. Socket read gaps only
+                    // continue waiting; an uncertain movement is NEVER resent.
+                    session.sendCommandAndWaitOk(g);
 
                     directTheta = targetTheta;
                     directRho = targetRho;
                     directPoint++;
                     acknowledgedPoints++;
 
-                    // The first point is the physical entry position. Match the
-                    // existing ORYN behavior but use the same no-abort Idle wait.
+                    // The first point is the physical entry position. Wait for the
+                    // actual entry move to finish before tracing the file itself.
                     if (pointIndex == 0 && !directStopRequested.get())
-                        waitForDirectIdle(out, in);
+                        session.waitUntilIdle();
                     pointIndex++;
                 }
 
@@ -1256,14 +1474,14 @@ public class MainActivity extends Activity {
                     // in this file has received its FluidNC acknowledgement.
                     if (acknowledgedPoints != pts.size())
                         throw new java.io.IOException("Direct streamer ended before all THR points were acknowledged");
-                    // After the final coordinate, keep querying FluidNC until it
-                    // explicitly reports <Idle>. Only then may this file complete.
-                    waitForDirectIdle(out, in);
+                    // After the final coordinate, keep querying on this SAME
+                    // exclusive connection until FluidNC explicitly reports Idle.
+                    session.waitUntilIdle();
                 }
             }
 
             // Restore absolute mode only AFTER all THR files and final Idle.
-            if (!directStopRequested.get()) sendDirectPatternAndWaitOk(out, in, "G90");
+            if (!directStopRequested.get()) session.sendCommandAndWaitOk("G90");
         } catch (Exception e) {
             String detail = e.getMessage() == null ? e.toString() : e.getMessage();
             String file = directCurrentFile == null ? "pattern" : directCurrentFile;
@@ -1271,22 +1489,9 @@ public class MainActivity extends Activity {
         }
         finally {
             if (directPatternSocket == sock) directPatternSocket = null;
-            try { if (sock != null) sock.close(); } catch (Exception ignored) {}
+            try { if (session != null) session.close(); else if (sock != null) sock.close(); } catch (Exception ignored) {}
+            releaseDirectPatternRuntimeLocks();
             directRunning.set(false); directPaused.set(false); directStopRequested.set(false); directCurrentFile = null;
-        }
-    }
-
-    private void waitForDirectIdle(OutputStream out, InputStream in) throws Exception {
-        while (true) {
-            if (directStopRequested.get()) throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
-            out.write('?'); out.flush();
-            String status = readStatusFrame(in, 1200);
-            String z = status == null ? "" : status.toLowerCase(java.util.Locale.US);
-            if (z.contains("<idle")) return;
-            if (containsFluidNcAlarm(z) || z.contains("error:"))
-                throw new java.io.IOException(status.trim().isEmpty() ? "FluidNC reported an error" : status.trim());
-            // Empty status / socket timeout is waiting/back-pressure, not completion.
-            Thread.sleep(100);
         }
     }
 
@@ -1317,27 +1522,6 @@ public class MainActivity extends Activity {
         throw new java.io.IOException("FluidNC acknowledgement timed out while motion planner was busy: " + line);
     }
 
-    private void sendDirectPatternAndWaitOk(OutputStream out, InputStream in, String line) throws Exception {
-        out.write((line + "\n").getBytes(StandardCharsets.UTF_8)); out.flush();
-        StringBuilder sb = new StringBuilder();
-        byte[] b = new byte[512];
-        while (true) {
-            if (directStopRequested.get()) throw new java.io.InterruptedIOException("ORYN Direct motion stopped");
-            try {
-                int n = in.read(b);
-                if (n < 0) throw new java.io.EOFException("FluidNC connection closed");
-                sb.append(new String(b, 0, n, StandardCharsets.UTF_8));
-                String z = sb.toString().toLowerCase(java.util.Locale.US);
-                if (containsFluidNcAlarm(z) || z.contains("error:"))
-                    throw new java.io.IOException(sb.toString().trim());
-                if (containsFluidNcOk(z)) return;
-            } catch (java.net.SocketTimeoutException timeout) {
-                // Critical Direct streaming rule: timeout means continue waiting.
-                // Never treat it as completion and never resend this relative move.
-            }
-        }
-    }
-
     private boolean containsFluidNcAlarm(String z) {
         if (z == null || z.isEmpty()) return false;
         return z.startsWith("alarm:") || z.contains("\nalarm:") || z.contains("\ralarm:");
@@ -1352,12 +1536,22 @@ public class MainActivity extends Activity {
     }
 
     private void directRealtime(byte b) {
-        try { Socket s = directPatternSocket; if (s != null && s.isConnected() && !s.isClosed()) { s.getOutputStream().write(b); s.getOutputStream().flush(); } } catch (Exception ignored) {}
+        try {
+            Socket s = directPatternSocket;
+            if (s != null && s.isConnected() && !s.isClosed()) synchronized (directSocketWriteLock) {
+                s.getOutputStream().write(b); s.getOutputStream().flush();
+            }
+        } catch (Exception ignored) {}
     }
 
     private void directStop() {
         directStopRequested.set(true); directPaused.set(false);
-        try { Socket s = directPatternSocket; if (s != null && s.isConnected() && !s.isClosed()) { s.getOutputStream().write(0x18); s.getOutputStream().flush(); s.close(); } } catch (Exception ignored) {}
+        try {
+            Socket s = directPatternSocket;
+            if (s != null && s.isConnected() && !s.isClosed()) synchronized (directSocketWriteLock) {
+                s.getOutputStream().write(0x18); s.getOutputStream().flush(); s.close();
+            }
+        } catch (Exception ignored) {}
     }
 
     private void startDiscoveryAsync() {
