@@ -1,6 +1,6 @@
 # ORYN Android V10.4.1 — Direct Final Validation
 
-Build: `ORYN-ANDROID-V10.4.1-DIRECT-FINAL-LIBRARY-FIX-20260902-1`
+Build: `ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-SCREEN-FIX-20260902-1`
 
 ## Packaging-time checks
 
@@ -26,6 +26,9 @@ Build: `ORYN-ANDROID-V10.4.1-DIRECT-FINAL-LIBRARY-FIX-20260902-1`
 - PASS — Wi-Fi setup scans with FluidNC `$WiFi/ListAPs` and shows ESP32-visible 2.4 GHz networks.
 - PASS — all four saved Wi-Fi settings require explicit FluidNC `ok` acknowledgements.
 - PASS — same-phone hotspot setup explains the required disconnect → enable 2.4 GHz hotspot → ESP32 power-cycle order.
+- PASS — Settings → Open WiFi Setup is intercepted before the Raspberry Pi-only route and opens Android Smart Wi-Fi.
+- PASS — Android Wi-Fi network and saved-network endpoints return arrays required by the locked Settings renderer.
+- PASS — the Wi-Fi Settings safety path is identical in Offline and Direct modes.
 - PASS — X5 measured coupling compensation is approximately Y−0.975238 for X=256, Y=210, gear ratio=6.25.
 - PASS — `clear_from_in` runs Center → Perimeter.
 - PASS — `clear_from_out` runs Perimeter → Center.

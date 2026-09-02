@@ -1,5 +1,5 @@
 ORYN Android V10.4.1 — Direct Final
-Build marker: ORYN-ANDROID-V10.4.1-DIRECT-FINAL-LIBRARY-FIX-20260902-1
+Build marker: ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-SCREEN-FIX-20260902-1
 
 Purpose:
 - Offline-first ORYN Android app
@@ -18,6 +18,8 @@ Purpose:
 - Pattern Designer saves directly into native Android ORYN Library storage
 - Browse merges saved Android patterns with the 100 bundled patterns after return/refresh
 - ESP32-side 2.4 GHz Wi-Fi detection and acknowledged FluidNC settings save
+- Settings → Open WiFi Setup opens Android Smart Wi-Fi without a blank screen
+- Legacy Wi-Fi route responses remain render-safe in Offline and Direct modes
 - Bundled offline pattern library, Pattern Designer and Pattern Forge
 
 License:

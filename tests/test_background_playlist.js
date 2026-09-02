@@ -28,6 +28,8 @@ assert(main.includes('scanFluidNcWifiNetworks')&&main.includes('$WiFi/ListAPs'),
 assert(main.includes('!containsFluidNcOk(lower)'),'Wi-Fi setting writes must require real FluidNC acknowledgements');
 assert(boot.includes('oryn-home-detect')&&boot.includes('Detect 2.4 GHz Networks from ESP32'),'Wi-Fi setup must expose ESP32-side 2.4 GHz detection');
 assert(boot.includes("Using this phone's hotspot?")&&boot.includes('disconnect FluidNC Wi-Fi'),'Same-phone hotspot sequence must be visible in Wi-Fi setup');
+assert(boot.includes("window.addEventListener('click',interceptAndroidWifiSetup,true)"),'Android Settings Wi-Fi button must be intercepted before the Pi route');
+assert(boot.includes('window.__orynOpenSmartWifi=openSmartWifi'),'Settings Wi-Fi must open the native Smart Wi-Fi dialog');
 assert(designer.includes("table.id==='oryn-direct-fluidnc'||table.directFluidNC"),'Pattern Designer must accept the active Direct table');
 assert(designer.includes('directNative:true'),'Direct Pattern Designer saves must use the native Android library');
 assert(designer.includes("window.OrynAndroid.directSavePattern(name,thr)"),'Standalone Pattern Designer must call native Android storage directly');
@@ -87,6 +89,19 @@ assert(result.files.length===1,'Generated pattern must not be duplicated through
  assert(!designerFetchCalled,'Standalone Direct Pattern Designer must not use the unpatched page fetch route');
  assert(designerMessages.some(x=>x.kind==='ok'&&x.text==='Saved: custom/Star 6.thr'),'Designer must show the verified native saved path');
 
+ const wifiNetworksResponse=await ctx.fetch('http://app.oryn/api/wifi/networks');
+ const wifiNetworks=await wifiNetworksResponse.json();
+ assert(Array.isArray(wifiNetworks),'Android Wi-Fi networks endpoint must return the array required by the Settings screen');
+ const wifiSavedResponse=await ctx.fetch('http://app.oryn/api/wifi/saved');
+ const wifiSaved=await wifiSavedResponse.json();
+ assert(Array.isArray(wifiSaved),'Android saved Wi-Fi endpoint must return the array required by the Settings screen');
+ localStorage.setItem('orynmotion_active_table','oryn-mobile-offline');
+ localStorage.setItem('oryn_direct_enabled','0');
+ const offlineWifiNetworks=await (await ctx.fetch('http://app.oryn/api/wifi/networks')).json();
+ assert(Array.isArray(offlineWifiNetworks),'Offline-mode Wi-Fi Settings must remain render-safe');
+ localStorage.setItem('orynmotion_active_table','oryn-direct-fluidnc');
+ localStorage.setItem('oryn_direct_enabled','1');
+
  const catalogResponse=await ctx.__test.directFetch(new URL('http://direct.oryn/list_theta_rho_files_with_metadata'),{method:'GET'});
  const catalogPayload=await catalogResponse.json();
  assert(catalogResponse.ok&&catalogPayload.length===101,'Browse must merge saved Android patterns with the 100 bundled patterns');
@@ -102,5 +117,5 @@ assert(result.files.length===1,'Generated pattern must not be duplicated through
  assert(started,'Direct streamer was not invoked for playlist');
  const sequence=JSON.parse(started[1]);
  assert(sequence.length===1&&sequence[0].asset==='user/Generated Art.thr','Playlist must stream the generated native THR file');
- console.log('PASS Android background playback, Activity reattach, native Pattern Designer save, Browse visibility, and playlist validation');
+ console.log('PASS Android Wi-Fi Settings safety, background playback, Activity reattach, native Pattern Designer save, Browse visibility, and playlist validation');
 })();

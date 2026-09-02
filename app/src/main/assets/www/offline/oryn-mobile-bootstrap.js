@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const BUILD='ORYN-ANDROID-V10.4.1-DIRECT-FINAL-LIBRARY-FIX-20260902-1';
+const BUILD='ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-SCREEN-FIX-20260902-1';
 const OFFLINE_ID='oryn-mobile-offline';
 const DIRECT_ID='oryn-direct-fluidnc';
 const DIRECT_AUTO_HOME_PENDING='oryn_direct_auto_home_pending_v1';
@@ -248,6 +248,19 @@ window.__orynNativeWifiConnection=function(state){if(!smartWifiModal())openSmart
 window.__orynNativeFluidDiscovery=function(payload){if(!smartWifiModal())openSmartWifi();if(payload&&payload.ok&&payload.device&&payload.device.host){smartWifiStatus('FluidNC found at '+payload.device.host+' ✓');setTimeout(()=>probeAndActivateDirect(payload.device.host),100);}else smartWifiStatus((payload&&payload.error)||'No FluidNC controller found on this Wi‑Fi / hotspot network.',true);};
 function addDirectTable(){openSmartWifi();}
 
+// The locked Settings UI links to the Raspberry Pi-only /wifi-setup route.
+// In Android that route cannot manage the phone or FluidNC and its legacy API
+// response assumptions can crash the React screen. Route the existing button
+// to ORYN's working native Smart Wi-Fi dialog before React handles the click.
+function interceptAndroidWifiSetup(event){
+ const source=event&&event.target,control=source&&source.closest?source.closest('button,a'):null;
+ if(!control||!/open\s*wifi\s*setup/i.test(String(control.textContent||'')))return;
+ try{event.preventDefault();event.stopPropagation();if(event.stopImmediatePropagation)event.stopImmediatePropagation();}catch(_){}
+ openSmartWifi();
+}
+window.__orynOpenSmartWifi=openSmartWifi;
+if(window.OrynAndroid&&window.addEventListener)window.addEventListener('click',interceptAndroidWifiSetup,true);
+
 function rehydrateDirectTransport(){
  const cfg=directConfig();if(!cfg||!window.OrynAndroid)return;
  setTimeout(()=>{try{
@@ -453,8 +466,11 @@ window.fetch=async function(input,init={}){
  if(p==='/get_led_config')return jsonResponse({provider:'none',wled_ip:'',dw_led_num_leds:0,dw_led_brightness:128,dw_led_speed:128,dw_led_intensity:128});
  if(p==='/api/version')return jsonResponse({current:'10.4.1 Mobile',latest:'10.4.1 Mobile',update_available:false});
  if(p==='/api/machine-hardware-profile')return jsonResponse({build:'V7-Mobile',read_only:true,controller_source:'offline',supported_drivers:{A4988:[1,2,4,8,16],DRV8825:[1,2,4,8,16,32],TMC2208:[1,2,4,8,16,32,64,128,256],TMC2209:[1,2,4,8,16,32,64,128,256],TMC5160:[1,2,4,8,16,32,64,128,256],CUSTOM_STEP_DIR:[1,2,4,8,16,32,64,128,256]},profile:{initialized:false,x:{driver:'A4988',microsteps:16},y:{driver:'A4988',microsteps:16}},controller:{axes:{x:{},y:{}}},geometry:{theta_calibrated:false,theta_revolution_units:null,rho_calibrated:false,rho_travel_units:null}});
- if(p==='/api/wifi/status')return jsonResponse({connected:false,ssid:null,ip_address:null,platform:'android'});
- if(p==='/api/wifi/networks'||p==='/api/wifi/saved')return jsonResponse({networks:[],saved:[]});
+ if(p==='/api/wifi/status')return jsonResponse({connected:false,mode:'android',ssid:null,ip:null,hostname:'oryn',platform:'android'});
+ // The locked Pi Wi-Fi component expects each endpoint itself to be an array.
+ // Returning an object here causes its `.map()` call to blank the whole SPA.
+ if(p==='/api/wifi/networks'||p==='/api/wifi/saved')return jsonResponse([]);
+ if(p==='/api/wifi/hotspot/password'&&m==='GET')return jsonResponse({password:''});
  if(p.startsWith('/api/dw_leds/'))return jsonResponse({success:true,power:false,brightness:0,effects:[],palettes:[],colors:[]});
  if(p==='/api/logs')return jsonResponse({logs:[]});
  if(p==='/api/security/verify')return jsonResponse({valid:false});
