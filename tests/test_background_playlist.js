@@ -30,10 +30,15 @@ assert(main.includes('!containsFluidNcOk(lower)'),'Wi-Fi setting writes must req
 assert(boot.includes('oryn-home-detect')&&boot.includes('Detect 2.4 GHz Networks from ESP32'),'Wi-Fi setup must expose ESP32-side 2.4 GHz detection');
 assert(boot.includes("Using this phone's hotspot?")&&boot.includes('disconnect FluidNC Wi-Fi'),'Same-phone hotspot sequence must be visible in Wi-Fi setup');
 assert(boot.includes("window.addEventListener('click',interceptAndroidWifiSetup,true)"),'Android Settings Wi-Fi button must be intercepted before the Pi route');
-assert(boot.includes('window.__orynOpenSmartWifi=openSmartWifi'),'Settings Wi-Fi must open the native Smart Wi-Fi dialog');
-assert(appBundle.includes('window.__orynOpenSmartWifi?window.__orynOpenSmartWifi():n("/wifi-setup")'),'Compiled Settings button must invoke Android Smart Wi-Fi directly');
-assert(appBundle.includes('path:"wifi-setup",element:o.jsx(Nse,{})'),'Compiled /wifi-setup route must use the safe Settings fallback');
-assert(!appBundle.includes('path:"wifi-setup",element:o.jsx(_se,{})'),'Crashing Raspberry Pi Wi-Fi component must not be routable in Android');
+assert(boot.includes("if(wifiSetupTarget()==='pi')return"),'Pi mode must not be captured by the Android Smart Wi-Fi interceptor');
+assert(boot.includes('window.__orynOpenWifiSetup=openWifiSetupForActiveTable'),'Settings Wi-Fi must dispatch by active table type');
+assert(appBundle.includes('window.__orynOpenWifiSetup?window.__orynOpenWifiSetup(n):n("/wifi-setup")'),'Compiled Settings button must invoke the mode-aware Wi-Fi dispatcher');
+assert(appBundle.includes('path:"wifi-setup",element:o.jsx(_se,{})'),'Compiled /wifi-setup route must retain the real Raspberry Pi Wi-Fi page');
+assert(!appBundle.includes('path:"wifi-setup",element:o.jsx(Nse,{})'),'Pi Wi-Fi route must not fall back to Settings when a Pi is active');
+assert(boot.includes('oryn-direct-pattern-orientation')&&boot.includes('Pattern orientation'),'Direct play sheet must expose pattern orientation controls');
+assert(boot.includes('theta_offset_rad:readPatternOrientationDegrees()*Math.PI/180'),'Direct pattern specs must carry the selected angular offset');
+assert(main.includes('spec.optDouble("theta_offset_rad", 0.0)'),'Native streamer must read the selected pattern orientation');
+assert(main.includes('double firstTheta = pts.get(0)[0] + requestedThetaOffset'),'Native streamer must rotate the full THR path before whole-turn alignment');
 assert(designer.includes("table.id==='oryn-direct-fluidnc'||table.directFluidNC"),'Pattern Designer must accept the active Direct table');
 assert(designer.includes('directNative:true'),'Direct Pattern Designer saves must use the native Android library');
 assert(designer.includes("window.OrynAndroid.directSavePattern(name,thr)"),'Standalone Pattern Designer must call native Android storage directly');
@@ -63,8 +68,21 @@ const OrynAndroid={
 const location={origin:'http://app.oryn',href:'http://app.oryn/',pathname:'/',hostname:'app.oryn',reload(){}};
 const ctx={console,localStorage,sessionStorage,document,location,MutationObserver:MO,NodeFilter:{SHOW_TEXT:4},Node:{},window:null,URL,Response,Headers,Request,fetch:async()=>new Response('{}',{status:200,headers:{'content-type':'application/json'}}),WebSocket:WS,EventTarget,Event,MessageEvent,CloseEvent:global.CloseEvent||class{constructor(type,opts){this.type=type;Object.assign(this,opts)}},setTimeout(){return 1;},clearTimeout(){},setInterval(){return 1;},clearInterval(){},OrynAndroid};
 ctx.window=ctx;
-boot=boot.replace(/\}\)\(\);\s*$/,"window.__test={updateLocalPlaylist,playlists,directFetch,canonicalPatternPath};})();");
+boot=boot.replace(/\}\)\(\);\s*$/,"window.__test={updateLocalPlaylist,playlists,directFetch,canonicalPatternPath,wifiSetupTarget,normalizePatternOrientation,readPatternOrientationDegrees};})();");
 vm.createContext(ctx);vm.runInContext(boot,ctx,{filename:'bootstrap.js'});
+
+assert(ctx.__test.wifiSetupTarget()==='direct','Direct table must route Settings Wi-Fi to Android Smart Wi-Fi');
+localStorage.setItem('orynmotion_tables',JSON.stringify({activeTableId:'pi-1',tables:[{id:'pi-1',name:'ORYN Pi',url:'http://192.168.1.40',isCurrent:false}]}));
+localStorage.setItem('orynmotion_active_table','pi-1');
+localStorage.setItem('oryn_direct_enabled','0');
+assert(ctx.__test.wifiSetupTarget()==='pi','Active ORYN Pi must route Settings Wi-Fi to the Pi page');
+localStorage.setItem('orynmotion_tables',JSON.stringify({activeTableId:'oryn-mobile-offline',tables:[{id:'oryn-mobile-offline',isCurrent:true,url:'http://app.oryn'}]}));
+localStorage.setItem('orynmotion_active_table','oryn-mobile-offline');
+assert(ctx.__test.wifiSetupTarget()==='offline','Offline mode must stay on the safe Android Wi-Fi path');
+localStorage.setItem('orynmotion_tables',JSON.stringify({activeTableId:'oryn-direct-fluidnc',tables:[{id:'oryn-direct-fluidnc',directFluidNC:true,directHost:'192.168.0.1',thetaRevUnits:50,rhoTravelUnits:22.2,rhoDirection:1,directFeed:60,isCurrent:true,url:'http://app.oryn'}]}));
+localStorage.setItem('orynmotion_active_table','oryn-direct-fluidnc');
+localStorage.setItem('oryn_direct_enabled','1');
+assert(ctx.__test.normalizePatternOrientation(-90)===270&&ctx.__test.normalizePatternOrientation(450)===90,'Pattern orientation must normalize into one revolution');
 
 let result=ctx.__test.updateLocalPlaylist({playlist_name:'Generated',pattern:'user/Generated Art.thr'},false);
 assert(result.success,'Generated pattern add must succeed');
@@ -106,6 +124,14 @@ assert(result.files.length===1,'Generated pattern must not be duplicated through
  localStorage.setItem('orynmotion_active_table','oryn-direct-fluidnc');
  localStorage.setItem('oryn_direct_enabled','1');
 
+ localStorage.setItem('oryn_direct_pattern_orientation_degrees_v1','90');
+ const orientedResponse=await ctx.__test.directFetch(new URL('http://direct.oryn/run_theta_rho'),{method:'POST',body:JSON.stringify({file_name:'star.thr',pre_execution:'clear_from_in'})});
+ assert(orientedResponse.ok,'Oriented Direct pattern must start');
+ const orientedSequence=JSON.parse(started[1]);
+ assert(orientedSequence.length===2,'Clear plus selected pattern sequence expected');
+ assert(!Object.prototype.hasOwnProperty.call(orientedSequence[0],'theta_offset_rad'),'Clearing pattern orientation must remain unchanged');
+ assert(Math.abs(orientedSequence[1].theta_offset_rad-Math.PI/2)<1e-12,'Selected pattern must receive the saved 90-degree orientation');
+
  const catalogResponse=await ctx.__test.directFetch(new URL('http://direct.oryn/list_theta_rho_files_with_metadata'),{method:'GET'});
  const catalogPayload=await catalogResponse.json();
  assert(catalogResponse.ok&&catalogPayload.length===101,'Browse must merge saved Android patterns with the 100 bundled patterns');
@@ -121,5 +147,5 @@ assert(result.files.length===1,'Generated pattern must not be duplicated through
  assert(started,'Direct streamer was not invoked for playlist');
  const sequence=JSON.parse(started[1]);
  assert(sequence.length===1&&sequence[0].asset==='user/Generated Art.thr','Playlist must stream the generated native THR file');
- console.log('PASS Android Wi-Fi Settings safety, background playback, Activity reattach, native Pattern Designer save, Browse visibility, and playlist validation');
+ console.log('PASS Android mode-aware Wi-Fi, pattern orientation, background playback, Activity reattach, native Pattern Designer save, Browse visibility, and playlist validation');
 })();

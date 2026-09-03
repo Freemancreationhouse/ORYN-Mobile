@@ -1,5 +1,5 @@
 ORYN Android V10.4.1 — Direct Final
-Build marker: ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-ROUTE-FIX-20260903-1
+Build marker: ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-ORIENTATION-20260903-1
 
 Purpose:
 - Offline-first ORYN Android app
@@ -18,9 +18,11 @@ Purpose:
 - Pattern Designer saves directly into native Android ORYN Library storage
 - Browse merges saved Android patterns with the 100 bundled patterns after return/refresh
 - ESP32-side 2.4 GHz Wi-Fi detection and acknowledged FluidNC settings save
-- Settings → Open WiFi Setup opens Android Smart Wi-Fi without a blank screen
+- Settings → Open WiFi Setup dispatches by active table: Android Smart Wi-Fi for Offline/Direct and the real Wi-Fi page for Pi
 - Legacy Wi-Fi route responses remain render-safe in Offline and Direct modes
-- Compiled Android router no longer mounts the Raspberry Pi-only Wi-Fi component
+- Compiled Android router retains the Raspberry Pi Wi-Fi component only for an actively selected Pi
+- Direct pattern sheet provides 0°, 90°, 180°, 270° and custom table-orientation control
+- Selected orientation rotates the physical pattern without altering `.thr` files or clearing routes
 - Bundled offline pattern library, Pattern Designer and Pattern Forge
 
 License:

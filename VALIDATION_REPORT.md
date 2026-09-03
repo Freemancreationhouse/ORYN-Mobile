@@ -1,6 +1,6 @@
 # ORYN Android V10.4.1 — Direct Final Validation
 
-Build: `ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-ROUTE-FIX-20260903-1`
+Build: `ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-ORIENTATION-20260903-1`
 
 ## Packaging-time checks
 
@@ -26,11 +26,14 @@ Build: `ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-ROUTE-FIX-20260903-1`
 - PASS — Wi-Fi setup scans with FluidNC `$WiFi/ListAPs` and shows ESP32-visible 2.4 GHz networks.
 - PASS — all four saved Wi-Fi settings require explicit FluidNC `ok` acknowledgements.
 - PASS — same-phone hotspot setup explains the required disconnect → enable 2.4 GHz hotspot → ESP32 power-cycle order.
-- PASS — Settings → Open WiFi Setup is intercepted before the Raspberry Pi-only route and opens Android Smart Wi-Fi.
-- PASS — the compiled Settings button invokes Android Smart Wi-Fi directly.
-- PASS — `/wifi-setup` mounts the safe Settings screen fallback; the crashing Pi component is not routable in Android.
+- PASS — Settings → Open WiFi Setup uses Android Smart Wi-Fi in Offline and Direct modes.
+- PASS — an active ORYN Pi bypasses the Android interceptor and opens the real Pi `/wifi-setup` page.
+- PASS — the compiled Settings button invokes the mode-aware dispatcher and retains the Pi Wi-Fi route.
 - PASS — Android Wi-Fi network and saved-network endpoints return arrays required by the locked Settings renderer.
-- PASS — the Wi-Fi Settings safety path is identical in Offline and Direct modes.
+- PASS — Offline, Direct ESP32 and Pi Wi-Fi routing are validated independently.
+- PASS — Direct playback exposes 0°, 90°, 180°, 270° and custom pattern orientation controls.
+- PASS — selected orientation is converted to radians and applied before whole-turn Theta alignment.
+- PASS — clearing patterns receive no orientation offset.
 - PASS — X5 measured coupling compensation is approximately Y−0.975238 for X=256, Y=210, gear ratio=6.25.
 - PASS — `clear_from_in` runs Center → Perimeter.
 - PASS — `clear_from_out` runs Perimeter → Center.

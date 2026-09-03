@@ -13,7 +13,7 @@ This repository contains the consolidated ORYN Android application. It opens as 
 
 Open **ESP32 Smart Connect → Wi-Fi network setup (change anytime)** while FluidNC is reachable, enter the new SSID/password, save, reboot the ESP32, then use **Find ESP32 on Current Network**. The app also supports manual IP fallback.
 
-On Android, **Settings → Open WiFi Setup** calls this same native Smart Wi-Fi dialog directly in both Offline and Direct modes. The compiled Android router does not mount the Raspberry Pi-only Wi-Fi component; `/wifi-setup` has a safe Settings fallback, so the app remains visible and the dialog can be closed normally.
+On Android, **Settings → Open WiFi Setup** is mode-aware. Offline and Direct ESP32 modes open Android Smart Wi-Fi without entering the incompatible local Pi screen. When an ORYN Raspberry Pi is the active table, the same button opens the real Pi `/wifi-setup` page and sends its Wi-Fi requests to that Pi.
 
 ## Direct ESP32 calibration
 
@@ -33,6 +33,8 @@ While Direct Home or pattern playback is active, Android runs an ongoing connect
 If the ORYN Activity is recreated while that foreground playback is still active, the reopened UI reattaches to the same process-wide motion state and FluidNC socket. It shows the running pattern and does not reconnect or issue automatic Home over the existing motion.
 
 Generated patterns are stored in playlists using their canonical `custom/*.thr` path. Direct playlist playback resolves those entries to the native Android `user/*.thr` files before starting the same acknowledged streamer.
+
+The Direct pattern sheet includes a saved **Pattern orientation** control with 0°, 90°, 180°, 270° and custom degree input. ORYN applies the chosen angular offset to the selected physical pattern without rewriting the `.thr` file; clearing patterns retain their original orientation.
 
 Pattern Designer now recognizes `ORYN Direct — ESP32 FluidNC` as a valid native library target even though it is the current table. Because Pattern Designer is a standalone page, **Save to ORYN Library** calls Android storage directly and requires an explicit native success response. The saved `custom/*.thr` entry is then merged into Browse and playlists; Browse increases from 100 to 101, 102, and onward after returning or refreshing.
 
@@ -73,7 +75,7 @@ Expected result:
 PASS connection-state deterministic tests
 PASS direct coupled motion parity
 PASS Direct auto-home, timer, consecutive-session, Idle, and clear-direction validation
-PASS Android Wi-Fi Settings safety, background playback, Activity reattach, native Pattern Designer save, Browse visibility, and playlist validation
+PASS Android mode-aware Wi-Fi, pattern orientation, background playback, Activity reattach, native Pattern Designer save, Browse visibility, and playlist validation
 ```
 
 See `VALIDATION_REPORT.md` for the packaging-time checks and the explicit APK-build limitation.

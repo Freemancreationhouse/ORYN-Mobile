@@ -338,7 +338,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct-final-wifi-route-fix"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct-final-wifi-orientation"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {
@@ -1348,10 +1348,13 @@ public class MainActivity extends Activity {
                 Object item = paths.opt(pi);
                 String rel;
                 String displayName;
+                double requestedThetaOffset = 0.0;
                 if (item instanceof JSONObject) {
                     JSONObject spec = (JSONObject) item;
                     rel = spec.optString("asset", "");
                     displayName = spec.optString("display", rel);
+                    requestedThetaOffset = spec.optDouble("theta_offset_rad", 0.0);
+                    if (!Double.isFinite(requestedThetaOffset)) requestedThetaOffset = 0.0;
                 } else {
                     rel = paths.optString(pi, "");
                     displayName = rel;
@@ -1379,13 +1382,15 @@ public class MainActivity extends Activity {
                 directTotal = pts.size(); directPoint = 0;
                 beginDirectFileTiming();
 
-                // Theta is periodic. Shift the entire file by an integer number of
-                // turns so its first angle is nearest the current logical theta.
+                // Theta is periodic. Apply the user-selected table orientation,
+                // then shift by whole turns so the first angle is nearest the
+                // current logical theta. Clearing specs omit the offset and stay
+                // physically unchanged.
                 double thetaOffset = 0.0;
                 if (!pts.isEmpty()) {
-                    double firstTheta = pts.get(0)[0];
+                    double firstTheta = pts.get(0)[0] + requestedThetaOffset;
                     double turns = Math.rint((directTheta - firstTheta) / (Math.PI * 2.0));
-                    thetaOffset = turns * Math.PI * 2.0;
+                    thetaOffset = requestedThetaOffset + turns * Math.PI * 2.0;
                 }
 
                 int pointIndex = 0;
