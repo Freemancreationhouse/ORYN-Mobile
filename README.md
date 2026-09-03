@@ -13,7 +13,7 @@ This repository contains the consolidated ORYN Android application. It opens as 
 
 Open **ESP32 Smart Connect → Wi-Fi network setup (change anytime)** while FluidNC is reachable, enter the new SSID/password, save, reboot the ESP32, then use **Find ESP32 on Current Network**. The app also supports manual IP fallback.
 
-On Android, **Settings → Open WiFi Setup** opens this same native Smart Wi-Fi dialog in both Offline and Direct modes. It does not navigate to the Raspberry Pi-only Wi-Fi page, so the app remains visible and the dialog can be closed normally.
+On Android, **Settings → Open WiFi Setup** calls this same native Smart Wi-Fi dialog directly in both Offline and Direct modes. The compiled Android router does not mount the Raspberry Pi-only Wi-Fi component; `/wifi-setup` has a safe Settings fallback, so the app remains visible and the dialog can be closed normally.
 
 ## Direct ESP32 calibration
 

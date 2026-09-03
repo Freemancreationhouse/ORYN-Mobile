@@ -1,5 +1,5 @@
 ORYN Android V10.4.1 — Direct Final
-Build marker: ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-SCREEN-FIX-20260902-1
+Build marker: ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-ROUTE-FIX-20260903-1
 
 Purpose:
 - Offline-first ORYN Android app
@@ -20,6 +20,7 @@ Purpose:
 - ESP32-side 2.4 GHz Wi-Fi detection and acknowledged FluidNC settings save
 - Settings → Open WiFi Setup opens Android Smart Wi-Fi without a blank screen
 - Legacy Wi-Fi route responses remain render-safe in Offline and Direct modes
+- Compiled Android router no longer mounts the Raspberry Pi-only Wi-Fi component
 - Bundled offline pattern library, Pattern Designer and Pattern Forge
 
 License:

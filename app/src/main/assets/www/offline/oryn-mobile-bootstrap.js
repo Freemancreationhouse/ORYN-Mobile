@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const BUILD='ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-SCREEN-FIX-20260902-1';
+const BUILD='ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-ROUTE-FIX-20260903-1';
 const OFFLINE_ID='oryn-mobile-offline';
 const DIRECT_ID='oryn-direct-fluidnc';
 const DIRECT_AUTO_HOME_PENDING='oryn_direct_auto_home_pending_v1';

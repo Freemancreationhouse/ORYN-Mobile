@@ -9,6 +9,7 @@ const main=fs.readFileSync(path.join(root,'app/src/main/java/com/studiokinematic
 const service=fs.readFileSync(path.join(root,'app/src/main/java/com/studiokinematics/oryn/OrynPlaybackService.java'),'utf8');
 const manifest=fs.readFileSync(path.join(root,'app/src/main/AndroidManifest.xml'),'utf8');
 const designer=fs.readFileSync(path.join(root,'app/src/main/assets/www/static/pattern-designer/app.js'),'utf8');
+const appBundle=fs.readFileSync(path.join(root,'app/src/main/assets/www/assets/index-D3rZVjEB.js'),'utf8');
 let boot=fs.readFileSync(path.join(root,'app/src/main/assets/www/offline/oryn-mobile-bootstrap.js'),'utf8');
 
 function assert(v,m){if(!v)throw new Error(m);}
@@ -30,6 +31,9 @@ assert(boot.includes('oryn-home-detect')&&boot.includes('Detect 2.4 GHz Networks
 assert(boot.includes("Using this phone's hotspot?")&&boot.includes('disconnect FluidNC Wi-Fi'),'Same-phone hotspot sequence must be visible in Wi-Fi setup');
 assert(boot.includes("window.addEventListener('click',interceptAndroidWifiSetup,true)"),'Android Settings Wi-Fi button must be intercepted before the Pi route');
 assert(boot.includes('window.__orynOpenSmartWifi=openSmartWifi'),'Settings Wi-Fi must open the native Smart Wi-Fi dialog');
+assert(appBundle.includes('window.__orynOpenSmartWifi?window.__orynOpenSmartWifi():n("/wifi-setup")'),'Compiled Settings button must invoke Android Smart Wi-Fi directly');
+assert(appBundle.includes('path:"wifi-setup",element:o.jsx(Nse,{})'),'Compiled /wifi-setup route must use the safe Settings fallback');
+assert(!appBundle.includes('path:"wifi-setup",element:o.jsx(_se,{})'),'Crashing Raspberry Pi Wi-Fi component must not be routable in Android');
 assert(designer.includes("table.id==='oryn-direct-fluidnc'||table.directFluidNC"),'Pattern Designer must accept the active Direct table');
 assert(designer.includes('directNative:true'),'Direct Pattern Designer saves must use the native Android library');
 assert(designer.includes("window.OrynAndroid.directSavePattern(name,thr)"),'Standalone Pattern Designer must call native Android storage directly');
