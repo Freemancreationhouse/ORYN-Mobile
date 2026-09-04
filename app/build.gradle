@@ -8,8 +8,8 @@ android {
         applicationId 'com.studiokinematics.oryn'
         minSdk 26
         targetSdk 35
-        versionCode 1040416
-        versionName '10.4.1-direct-final-wifi-orientation'
+        versionCode 1040417
+        versionName '10.4.1-direct-final-orientation-control-fix'
     }
 
     buildTypes {

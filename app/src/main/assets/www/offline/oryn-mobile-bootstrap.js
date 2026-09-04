@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const BUILD='ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-ORIENTATION-20260903-1';
+const BUILD='ORYN-ANDROID-V10.4.1-DIRECT-FINAL-ORIENTATION-CONTROL-FIX-20260904-1';
 const OFFLINE_ID='oryn-mobile-offline';
 const DIRECT_ID='oryn-direct-fluidnc';
 const DIRECT_AUTO_HOME_PENDING='oryn_direct_auto_home_pending_v1';
@@ -253,12 +253,27 @@ window.__orynNativeFluidDiscovery=function(payload){if(!smartWifiModal())openSma
 function addDirectTable(){openSmartWifi();}
 
 function installPatternOrientationControl(){
- const old=document.getElementById('oryn-direct-pattern-orientation');
+ let old=document.getElementById('oryn-direct-pattern-orientation');
  if(!directConfig()){if(old)old.remove();return;}
- const marker=[...document.querySelectorAll('.km-eyebrow')].find(x=>/pre-run surface/i.test(String(x.textContent||'')));
- const clearBlock=marker&&marker.closest?marker.closest('.mb-7'):null;
- if(!clearBlock||!clearBlock.parentNode||old)return;
- const box=document.createElement('div');box.id='oryn-direct-pattern-orientation';box.className='mb-7';box.style.cssText='padding:14px;border:1px solid rgba(241,199,91,.38);border-radius:14px;background:rgba(241,199,91,.06)';
+
+ // The current ORYN Pattern Details sheet is a Radix dialog and exposes the
+ // Clear choices as preExecutionAction radio inputs.  Anchor to that stable
+ // functional element instead of a visual class/label from an older UI build.
+ // This keeps the control visible even when headings or Tailwind classes change.
+ let sheet=null,clearBlock=null;
+ const roots=[...document.querySelectorAll('[role="dialog"],[data-state="open"]')];
+ for(const root of roots){
+  const radio=root.querySelector&&root.querySelector('input[name="preExecutionAction"]');
+  const play=radio&&[...root.querySelectorAll('button')].find(b=>/^play$/i.test(String(b.textContent||'').trim()));
+  if(!radio||!play)continue;
+  const block=radio.closest&&radio.closest('.mb-6');
+  if(block&&block.parentNode){sheet=root;clearBlock=block;break;}
+ }
+ if(!sheet||!clearBlock){if(old)old.remove();return;}
+ if(old&&sheet.contains(old))return;
+ if(old)old.remove();
+
+ const box=document.createElement('div');box.id='oryn-direct-pattern-orientation';box.className='mb-6';box.style.cssText='padding:14px;border:1px solid rgba(241,199,91,.38);border-radius:14px;background:rgba(241,199,91,.06)';
  box.innerHTML='<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px"><div><div style="font-size:10px;letter-spacing:.15em;color:#d8b957;font-weight:800">TABLE ALIGNMENT</div><div style="font-size:15px;font-weight:700">Pattern orientation</div></div><span id="oryn-orientation-value" style="font-size:12px;padding:4px 8px;border-radius:999px;background:#262115;color:#f1c75b"></span></div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px"><button type="button" data-oryn-angle="0">0°</button><button type="button" data-oryn-angle="90">90°</button><button type="button" data-oryn-angle="180">180°</button><button type="button" data-oryn-angle="270">270°</button></div><div style="display:flex;gap:8px;margin-top:8px"><input id="oryn-orientation-custom" type="number" inputmode="decimal" min="0" max="359.99" step="1" placeholder="Custom degrees" style="min-width:0;flex:1;padding:9px;border:1px solid #3b3b3b;border-radius:9px;background:#181818;color:#fff"><button type="button" id="oryn-orientation-apply">Apply</button></div><div style="font-size:11px;color:#aaa;margin-top:8px">Rotates only the selected pattern on the physical table. Clearing remains unchanged.</div>';
  const styleButton=b=>{b.style.cssText='padding:9px;border:1px solid #49412c;border-radius:9px;background:#211d13;color:#f4d477;font-weight:700';};
  const value=box.querySelector('#oryn-orientation-value'),input=box.querySelector('#oryn-orientation-custom');

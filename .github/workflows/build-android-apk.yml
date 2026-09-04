@@ -47,11 +47,11 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN-V10.4.1-direct-final-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk ORYN-V10.4.1-direct-final-orientation-fix-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ORYN-V10.4.1-Direct-Final-APK
-          path: ORYN-V10.4.1-direct-final-debug.apk
+          name: ORYN-V10.4.1-Direct-Orientation-Fix-APK
+          path: ORYN-V10.4.1-direct-final-orientation-fix-debug.apk
           if-no-files-found: error
