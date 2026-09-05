@@ -338,7 +338,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-direct-final-orientation-control-fix"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-pi-tmc2208-hotspot"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {

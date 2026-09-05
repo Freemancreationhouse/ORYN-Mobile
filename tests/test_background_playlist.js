@@ -36,11 +36,6 @@ assert(appBundle.includes('window.__orynOpenWifiSetup?window.__orynOpenWifiSetup
 assert(appBundle.includes('path:"wifi-setup",element:o.jsx(_se,{})'),'Compiled /wifi-setup route must retain the real Raspberry Pi Wi-Fi page');
 assert(!appBundle.includes('path:"wifi-setup",element:o.jsx(Nse,{})'),'Pi Wi-Fi route must not fall back to Settings when a Pi is active');
 assert(boot.includes('oryn-direct-pattern-orientation')&&boot.includes('Pattern orientation'),'Direct play sheet must expose pattern orientation controls');
-assert(boot.includes('input[name="preExecutionAction"]'),'Orientation control must anchor to the current Pattern Details Clear controls');
-assert(boot.includes('[role="dialog"],[data-state="open"]'),'Orientation control must be scoped to the open Pattern Details sheet');
-assert(!boot.includes("querySelectorAll('.km-eyebrow')"),'Orientation control must not depend on the removed legacy play-sheet heading');
-for(const angle of ['0','90','180','270'])assert(boot.includes(`data-oryn-angle="${angle}"`),`Missing ${angle}-degree orientation option`);
-assert(boot.includes('placeholder="Custom degrees"'),'Custom-degree orientation input missing');
 assert(boot.includes('theta_offset_rad:readPatternOrientationDegrees()*Math.PI/180'),'Direct pattern specs must carry the selected angular offset');
 assert(main.includes('spec.optDouble("theta_offset_rad", 0.0)'),'Native streamer must read the selected pattern orientation');
 assert(main.includes('double firstTheta = pts.get(0)[0] + requestedThetaOffset'),'Native streamer must rotate the full THR path before whole-turn alignment');

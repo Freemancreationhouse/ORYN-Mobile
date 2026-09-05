@@ -44,11 +44,11 @@ This correction is important for clears such as `clear_from_out.thr`: the file c
 
 Push this project to the `main` branch. The workflow `.github/workflows/build-android-apk.yml` builds with Android SDK 35, Java 17 and Gradle 8.9. Download the artifact named:
 
-`ORYN-V10.4.1-Direct-Orientation-Fix-APK`
+`ORYN-V10.4.1-Direct-Final-APK`
 
 The APK filename inside the artifact is:
 
-`ORYN-V10.4.1-direct-final-orientation-fix-debug.apk`
+`ORYN-V10.4.1-direct-final-debug.apk`
 
 ## Upgrade from earlier Direct builds
 
@@ -85,3 +85,9 @@ See `VALIDATION_REPORT.md` for the packaging-time checks and the explicit APK-bu
 Commit the **contents of this folder as the repository root**. Do not put the whole project one
 extra folder deep. The `.github/workflows/build-android-apk.yml` workflow will then run on pushes
 to `main` that change the Android project files.
+
+## Pi + Uno + TMC2208 phone-hotspot build (2026-09-05)
+
+This package is synchronized to the working Pi backend `UC-DUNE-MOTION-V9-TMC2208-UNO-GRBL-HOTFIX-20260905-2`. In Pi mode the Android app uses the Pi backend as the motion authority. The app can discover the Pi on normal Wi-Fi or on the Android phone's own hotspot/tether subnet, and manual `http://<PI-IP>:8080` remains available.
+
+GitHub Actions artifact: `ORYN-V10.4.1-PI-TMC2208-HOTSPOT-APK`.

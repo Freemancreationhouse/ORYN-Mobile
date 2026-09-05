@@ -1,19 +1,6 @@
 # ORYN Android V10.4.1 — Direct Final Validation
 
-Build: `ORYN-ANDROID-V10.4.1-DIRECT-FINAL-ORIENTATION-CONTROL-FIX-20260904-1`
-
-## Orientation-control correction
-
-- PASS — the visible control anchors to `input[name="preExecutionAction"]`
-  inside the open Pattern Details dialog.
-- PASS — the removed legacy `.km-eyebrow` anchor is no longer used.
-- PASS — the control includes 0°, 90°, 180°, 270°, and custom degree input.
-- PASS — the selected angle is normalized and retained in Android WebView
-  local storage for later individual patterns and playlists.
-- PASS — selected pattern entries carry `theta_offset_rad`; clear-pattern
-  entries intentionally do not.
-- PASS — native playback applies the offset in memory and never rewrites the
-  source THR library file.
+Build: `ORYN-ANDROID-V10.4.1-DIRECT-FINAL-WIFI-ORIENTATION-20260903-1`
 
 ## Packaging-time checks
 
