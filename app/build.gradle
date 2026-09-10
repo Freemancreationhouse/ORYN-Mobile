@@ -8,8 +8,8 @@ android {
         applicationId 'com.studiokinematics.oryn'
         minSdk 26
         targetSdk 35
-        versionCode 1040418
-        versionName '10.4.1-scara-v04'
+        versionCode 1040419
+        versionName '10.4.1-scara-v04-full-control-hotfix2'
     }
 
     buildTypes {
