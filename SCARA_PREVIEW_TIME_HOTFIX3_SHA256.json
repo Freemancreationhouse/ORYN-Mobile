@@ -1,0 +1,9 @@
+{
+  "app/src/main/assets/www/offline/oryn-mobile-bootstrap.js": "7e66858d885a204b0ae5cffd98952dfda7d5010260a809ec9965532f19157cc5",
+  "app/build.gradle": "d9d2de41adf5f3891cf4c4f50bdebbfb119b6633645c0de7dca8301bba894d69",
+  "app/src/main/java/com/studiokinematics/oryn/MainActivity.java": "9537c8e23d92192a11874af16f1c5f1fb9a251bd92e2845ff89869287acb65f2",
+  ".github/workflows/build-android-apk.yml": "2f34d3761cb6f521f75af4d183c9b71a62b5344bc27e18f50d7ffcfef9c88234",
+  "tests/test_scara_v04_preview_time_hotfix3.js": "2915552c6c77f447147aad242985224694b97142208bc7eb0efc2a75f3d23b49",
+  "RELEASE_NOTES_SCARA_PREVIEW_TIME_HOTFIX3.md": "ca8c6bf656f826f5e7ac25168cf6179f429513d468c32796398541bea938d240",
+  "VALIDATION_REPORT_SCARA_PREVIEW_TIME_HOTFIX3.txt": "77871e161a1b4bb49c89bc666c5309ef868fcd59770e25c45c88321375d3cbef"
+}

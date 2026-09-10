@@ -1,0 +1,23 @@
+ORYN Android V10.4.1 — SCARA V0.4 Preview + Timing Hotfix 3
+
+Validation completed:
+- JavaScript syntax: PASS
+- Existing connection-state regression: PASS
+- Existing Direct coupled-motion regression: PASS
+- Existing Direct playback-state regression: PASS
+- Existing background/playlist regression: PASS
+- Existing Pi TMC2208/hotspot regression: PASS
+- SCARA V0.4 integration regression: PASS
+- SCARA Full Control regression: PASS
+- SCARA Preview + Timing Hotfix 3 regression: PASS
+
+Fixed:
+- Keeps the real local ORYN pattern filename during SCARA playback.
+- Expanded Now Playing can retrieve the real Theta-Rho coordinates again.
+- SCARA preview progress follows ESP32 played_points.
+- Total point count is the real THR coordinate count.
+- Elapsed and remaining time are estimated from the actual THR XY path length, 152 mm radius and 7 mm/s SCARA drawing speed.
+
+Homing:
+- Automatic Home after Set Reference / reconnect is preserved.
+- Full power-cycle absolute homing is intentionally NOT faked in Android. Two physical joint reference sensors are required for safe true automatic power-on homing with 28BYJ + ULN2003.

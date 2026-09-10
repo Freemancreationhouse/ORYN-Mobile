@@ -23,7 +23,7 @@ const must=[
  'rotateThrText(raw,readPatternOrientationDegrees())'
 ];
 for(const x of must){if(!js.includes(x))throw new Error('Missing SCARA integration marker: '+x);}
-if(!gradle.includes("versionName '10.4.1-scara-v04-full-control-hotfix2'"))throw new Error('Android version not bumped');
+if(!gradle.includes("versionName '10.4.1-scara-v04-preview-time-hotfix3'"))throw new Error('Android version not bumped');
 // Guard the locked existing controller paths.
 for(const x of ["const DIRECT_ID='oryn-direct-fluidnc'",'directStartPattern','directHome','startDiscovery','/api/pattern-designer/save'])if(!js.includes(x))throw new Error('Locked existing function missing: '+x);
 for(const x of ["oryn_app_current.thr","SCARA reference required","await startScaraItem(cfg,first)"]) if(!js.includes(x)) throw new Error('Missing SCARA playback hotfix marker: '+x);

@@ -338,7 +338,7 @@ public class MainActivity extends Activity {
     }
 
     public class OrynAndroidBridge {
-        @JavascriptInterface public String getAppVersion() { return "10.4.1-scara-v04-full-control-hotfix2"; }
+        @JavascriptInterface public String getAppVersion() { return "10.4.1-scara-v04-preview-time-hotfix3"; }
         @JavascriptInterface public boolean consumeFreshLaunch() { return freshLaunchPending.getAndSet(false); }
         @JavascriptInterface public void openWifiSettings() {
             runOnUiThread(() -> {

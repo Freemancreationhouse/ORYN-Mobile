@@ -26,8 +26,8 @@ const must=[
  'rotateThrText(raw,readPatternOrientationDegrees())'
 ];
 for(const x of must) if(!js.includes(x)) throw new Error('Missing SCARA full-control marker: '+x);
-if(!gradle.includes("versionName '10.4.1-scara-v04-full-control-hotfix2'"))throw new Error('VersionName not updated');
-if(!gradle.includes('versionCode 1040419'))throw new Error('VersionCode not updated');
-if(!java.includes('10.4.1-scara-v04-full-control-hotfix2'))throw new Error('MainActivity app version not updated');
+if(!gradle.includes("versionName '10.4.1-scara-v04-preview-time-hotfix3'"))throw new Error('VersionName not updated');
+if(!gradle.includes('versionCode 1040420'))throw new Error('VersionCode not updated');
+if(!java.includes('10.4.1-scara-v04-preview-time-hotfix3'))throw new Error('MainActivity app version not updated');
 for(const x of ["const DIRECT_ID='oryn-direct-fluidnc'",'directStartPattern','directHome','startDiscovery','/api/pattern-designer/save']) if(!js.includes(x)) throw new Error('Locked existing path missing: '+x);
 console.log('SCARA V0.4 Full Control Hotfix 2 source checks passed.');

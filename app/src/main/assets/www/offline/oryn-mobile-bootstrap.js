@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-const BUILD='ORYN-ANDROID-V10.4.1-SCARA-V04-FULL-CONTROL-HOTFIX2-20260910';
+const BUILD='ORYN-ANDROID-V10.4.1-SCARA-V04-PREVIEW-TIME-HOTFIX3-20260911';
 const OFFLINE_ID='oryn-mobile-offline';
 const DIRECT_ID='oryn-direct-fluidnc';
 const SCARA_ID='oryn-scara-esp32';
@@ -365,7 +365,7 @@ setInterval(()=>{try{
 }catch(_){}},900);
 
 
-const scaraState={running:false,paused:false,stopping:false,current_file:null,current:0,total:0,percentage:0,theta:0,rho:1,error:'',last_completed_time:0};
+const scaraState={running:false,paused:false,stopping:false,current_file:null,current:0,total:0,percentage:0,theta:0,rho:1,error:'',last_completed_time:0,speed:7,total_time:0,elapsed_time:0,remaining_time:0,time_cumulative:[]};
 function scaraAutoHomeEnabled(){try{const v=localStorage.getItem(SCARA_AUTO_HOME_KEY);return v===null?true:v==='1';}catch(_){return true;}}
 function setScaraAutoHomeEnabled(on){try{localStorage.setItem(SCARA_AUTO_HOME_KEY,on?'1':'0');}catch(_){}return !!on;}
 function readScaraCalibrationCheck(){try{return JSON.parse(localStorage.getItem(SCARA_CAL_KEY)||'{}')||{};}catch(_){return {};}}
@@ -383,6 +383,23 @@ let scaraWorker=null;
 function safeScaraFilename(name,prefix='app'){const base=String(name||'pattern.thr').split('/').pop().replace(/[^a-zA-Z0-9._-]+/g,'_').replace(/^\.+/,'');return (prefix+'_'+(base||'pattern.thr')).slice(-58);}
 async function patternText(path){const p=patternEntry(path);if(!p)throw new Error('Pattern is not available in the local ORYN library.');if(p.native_path){const txt=window.OrynAndroid&&window.OrynAndroid.directReadPattern?window.OrynAndroid.directReadPattern(path):'';if(!txt)throw new Error('Could not read local generated pattern.');return txt;}const r=await nativeFetch(p.thr_url);if(!r.ok)throw new Error('Could not read bundled pattern.');return await r.text();}
 function rotateThrText(txt,degrees){const off=normalizePatternOrientation(degrees)*Math.PI/180;if(Math.abs(off)<1e-12)return String(txt);return String(txt).split(/\r?\n/).map(line=>{const trimmed=line.trim();if(!trimmed||trimmed.startsWith('#')||trimmed.startsWith(';'))return line;const m=trimmed.match(/^([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s+([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)(.*)$/);if(!m)return line;const theta=Number(m[1]),rho=Number(m[2]);if(!Number.isFinite(theta)||!Number.isFinite(rho))return line;return (theta+off).toFixed(8)+' '+rho.toFixed(8)+(m[3]||'');}).join('\n');}
+function buildScaraTiming(pts,radiusMm,speedMmS){
+ const radius=Math.max(0.1,Number(radiusMm)||152),speed=Math.max(0.1,Number(speedMmS)||7),cum=new Array(pts.length).fill(0);let total=0;
+ for(let i=1;i<pts.length;i++){
+  const a=pts[i-1],b=pts[i],r1=Math.max(0,Math.min(1,Number(a[1])))*radius,r2=Math.max(0,Math.min(1,Number(b[1])))*radius;
+  const x1=r1*Math.cos(Number(a[0])),y1=r1*Math.sin(Number(a[0])),x2=r2*Math.cos(Number(b[0])),y2=r2*Math.sin(Number(b[0]));
+  total+=Math.hypot(x2-x1,y2-y1)/speed;cum[i]=total;
+ }
+ return {cum,total};
+}
+function updateScaraTiming(current,percentage){
+ const total=Math.max(0,Number(scaraState.total_time)||0),cum=Array.isArray(scaraState.time_cumulative)?scaraState.time_cumulative:[];
+ let elapsed=0;const n=Math.max(0,Number(current)||0);
+ if(cum.length&&n>0)elapsed=Number(cum[Math.min(cum.length-1,Math.max(0,n-1))]||0);
+ else elapsed=total*Math.max(0,Math.min(100,Number(percentage)||0))/100;
+ scaraState.elapsed_time=Math.max(0,Math.min(total,elapsed));scaraState.remaining_time=Math.max(0,total-scaraState.elapsed_time);
+}
+
 async function scaraUploadText(cfg,name,txt){
  const filename='oryn_app_current.thr';
  const fd=new FormData();
@@ -395,11 +412,13 @@ async function scaraUploadText(cfg,name,txt){
  if(!found)throw new Error('SCARA pattern upload was not stored on the ESP32.');
  return filename;
 }
-async function refreshScaraStatus(cfg){try{const st=await scaraJson(cfg.host,'/api/status');scaraState.running=!!st.playing;scaraState.paused=!!st.paused;scaraState.current_file=st.pattern||scaraState.current_file;scaraState.percentage=Number(st.progress||0);scaraState.current=Number(st.played_points||0);scaraState.total=Math.max(scaraState.total,scaraState.current);scaraState.theta=Number(st.theta_deg||0)*Math.PI/180;scaraState.rho=Number(st.rho||0);scaraState.error=String(st.last_error||'');return st;}catch(e){scaraState.error=String(e&&e.message||e);throw e;}}
-async function waitScaraPattern(cfg){while(!scaraState.stopping){const st=await refreshScaraStatus(cfg);if(!st.playing){if(Number(st.progress||0)>=99.9){scaraState.last_completed_time=0;return true;}if(st.last_error)throw new Error(st.last_error);throw new Error('SCARA stopped before the pattern completed.');}await new Promise(r=>setTimeout(r,260));}return false;}
+async function refreshScaraStatus(cfg){try{const st=await scaraJson(cfg.host,'/api/status');scaraState.running=!!st.playing;scaraState.paused=!!st.paused;scaraState.percentage=Number(st.progress||0);scaraState.current=Number(st.played_points||0);if(!(Number(scaraState.total)>0))scaraState.total=Math.max(scaraState.current,1);else scaraState.total=Math.max(scaraState.total,scaraState.current);scaraState.theta=Number(st.theta_deg||0)*Math.PI/180;scaraState.rho=Number(st.rho||0);scaraState.error=String(st.last_error||'');updateScaraTiming(scaraState.current,scaraState.percentage);return st;}catch(e){scaraState.error=String(e&&e.message||e);throw e;}}
+async function waitScaraPattern(cfg){while(!scaraState.stopping){const st=await refreshScaraStatus(cfg);if(!st.playing){if(Number(st.progress||0)>=99.9){scaraState.current=scaraState.total;scaraState.percentage=100;scaraState.elapsed_time=scaraState.total_time;scaraState.remaining_time=0;scaraState.last_completed_time=scaraState.total_time;return true;}if(st.last_error)throw new Error(st.last_error);throw new Error('SCARA stopped before the pattern completed.');}await new Promise(r=>setTimeout(r,260));}return false;}
 async function startScaraItem(cfg,item){
  scaraState.current_file=item.display||item.path;
  const raw=await patternText(item.path);
+ const pts=parseThrText(raw);if(!pts.length)throw new Error('SCARA pattern contains no valid Theta-Rho coordinates.');
+ scaraState.current=0;scaraState.percentage=0;scaraState.total=pts.length;scaraState.speed=7;const timing=buildScaraTiming(pts,cfg.radius_mm,scaraState.speed);scaraState.time_cumulative=timing.cum;scaraState.total_time=timing.total;scaraState.elapsed_time=0;scaraState.remaining_time=timing.total;scaraState.last_completed_time=0;
  const txt=item.rotate===false?raw:rotateThrText(raw,readPatternOrientationDegrees());
  const remote=await scaraUploadText(cfg,item.display||item.path,txt);
  await scaraJson(cfg.host,'/api/play?file='+encodeURIComponent(remote),{method:'POST'});
@@ -672,7 +691,7 @@ class MockSocket extends EventTarget{
  send(){} close(){if(this._timer)clearInterval(this._timer);if(this.readyState>=2)return;this.readyState=3;const e=new CloseEvent('close',{code:1000,reason:'ORYN local socket'});this.dispatchEvent(e);if(this.onclose)this.onclose(e);} }
 class ScaraStatusSocket extends EventTarget{
  constructor(url){super();this.url=String(url);this.readyState=0;this._busy=false;setTimeout(()=>{this.readyState=1;const e=new Event('open');this.dispatchEvent(e);if(this.onopen)this.onopen(e);this._timer=setInterval(()=>this._tick(),450);this._tick();},20);}
- async _tick(){if(this.readyState!==1||this._busy)return;this._busy=true;try{const cfg=scaraConfig();if(!cfg)return;let st={};try{st=await scaraJson(cfg.host,'/api/status');scaraState.running=!!st.playing;scaraState.paused=!!st.paused;scaraState.current_file=st.pattern||scaraState.current_file;scaraState.percentage=Number(st.progress||0);scaraState.current=Number(st.played_points||0);scaraState.theta=Number(st.theta_deg||0)*Math.PI/180;scaraState.rho=Number(st.rho||0);scaraState.error=String(st.last_error||'');}catch(e){st={};scaraState.error=String(e&&e.message||e);}const data={type:'status_update',data:{current_file:st.pattern||scaraState.current_file||null,is_paused:!!st.paused,manual_pause:!!st.paused,scheduled_pause:false,is_running:!!st.playing,is_homing:false,is_clearing:false,sensor_homing_failed:false,progress:(st.playing||Number(st.progress||0)>0)?{current:Number(st.played_points||0),total:Math.max(Number(st.played_points||0),1),percentage:Number(st.progress||0),elapsed_time:0,remaining_time:0}:null,playlist:null,speed:7,pause_time_remaining:0,original_pause_time:null,connection_status:!!Object.keys(st).length,current_theta:Number(st.theta_deg||0)*Math.PI/180,current_rho:Number(st.rho||0),firmware_version:'ORYN SCARA '+String(cfg.firmware||'V0.4'),table_type:'ORYN SCARA',rho_calibrated:true,rho_travel_units:Number(cfg.radius_mm||152),theta_calibrated:true,theta_revolution_units:360,rotation_calibration_active:false,perimeter_calibration_active:false,referenced:!!st.referenced}};const e=new MessageEvent('message',{data:JSON.stringify(data)});this.dispatchEvent(e);if(this.onmessage)this.onmessage(e);}finally{this._busy=false;}}
+ async _tick(){if(this.readyState!==1||this._busy)return;this._busy=true;try{const cfg=scaraConfig();if(!cfg)return;let st={};try{st=await refreshScaraStatus(cfg);}catch(e){st={};scaraState.error=String(e&&e.message||e);}const pct=Number(st.progress||scaraState.percentage||0),cur=Number(st.played_points||scaraState.current||0),tot=Math.max(Number(scaraState.total)||0,cur,1);updateScaraTiming(cur,pct);const hasProgress=!!st.playing||pct>0||cur>0;const data={type:'status_update',data:{current_file:scaraState.current_file||null,is_paused:!!st.paused,manual_pause:!!st.paused,scheduled_pause:false,is_running:!!st.playing,is_homing:false,is_clearing:false,sensor_homing_failed:false,progress:hasProgress?{current:cur,total:tot,percentage:pct,elapsed_time:Number(scaraState.elapsed_time||0),remaining_time:Number(scaraState.remaining_time||0),last_completed_time:null}:null,playlist:null,speed:Number(scaraState.speed||7),pause_time_remaining:0,original_pause_time:null,connection_status:!!Object.keys(st).length,current_theta:Number(st.theta_deg||0)*Math.PI/180,current_rho:Number(st.rho||0),firmware_version:'ORYN SCARA '+String(cfg.firmware||'V0.4'),table_type:'ORYN SCARA',rho_calibrated:true,rho_travel_units:Number(cfg.radius_mm||152),theta_calibrated:true,theta_revolution_units:360,rotation_calibration_active:false,perimeter_calibration_active:false,referenced:!!st.referenced}};const e=new MessageEvent('message',{data:JSON.stringify(data)});this.dispatchEvent(e);if(this.onmessage)this.onmessage(e);}finally{this._busy=false;}}
  send(){} close(){if(this._timer)clearInterval(this._timer);if(this.readyState>=2)return;this.readyState=3;const e=new CloseEvent('close',{code:1000,reason:'ORYN SCARA local socket'});this.dispatchEvent(e);if(this.onclose)this.onclose(e);}}
 class DirectStatusSocket extends EventTarget{
  constructor(url){super();this.url=String(url);this.readyState=0;setTimeout(()=>{this.readyState=1;const e=new Event('open');this.dispatchEvent(e);if(this.onopen)this.onopen(e);this._timer=setInterval(()=>this._tick(),300);this._tick();},20);}
@@ -718,7 +737,7 @@ function openScaraControlPanel(){
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px"><button id="oryn-sctl-ref" class="oryn-sctl-main">SET REFERENCE</button><button id="oryn-sctl-home" class="oryn-sctl-main">HOME / CENTRE</button><button id="oryn-sctl-perim" class="oryn-sctl-main">PERIMETER 152 mm</button><button id="oryn-sctl-stop" class="oryn-sctl-main" style="border-color:#704040">STOP</button></div>
  <label style="display:flex;gap:10px;align-items:center;margin-top:12px;padding:11px;border:1px solid #333;border-radius:12px;background:#151515"><input id="oryn-scara-auto" type="checkbox" style="width:20px;height:20px"><div><div style="font-weight:750">Automatic Home</div><div style="font-size:11px;color:#aaa">After Set Reference, and on reconnect while ESP32 still knows its reference, move automatically to Centre.</div></div></label>
  <div style="margin-top:16px;border-top:1px solid #333;padding-top:13px"><div style="font-size:11px;letter-spacing:.14em;color:#e2c86f;font-weight:800">SCARA CALIBRATION</div><div style="font-size:12px;color:#aaa;margin:5px 0 10px">Reference calibration + radius and rotation verification. Validated mechanical values remain 76 / 76 / 152 mm.</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button id="oryn-sctl-radius" class="oryn-sctl-cal">Radius / Perimeter Test</button><button id="oryn-sctl-30" class="oryn-sctl-cal">30° Rotation Test</button><button id="oryn-sctl-360" class="oryn-sctl-cal">Full 360° Test</button><button id="oryn-sctl-refresh" class="oryn-sctl-cal">Refresh Status</button></div><div id="oryn-sctl-calstatus" style="font-size:11px;color:#aaa;margin-top:10px">Saved checks: Reference ${cal.reference?'✓':'—'} · Radius ${cal.radius_152?'✓':'—'} · 30° ${cal.rotation_30?'✓':'—'} · 360° ${cal.rotation_360?'✓':'—'}</div></div>
- <div style="font-size:11px;color:#b7b7b7;line-height:1.5;margin-top:14px;padding:10px;border:1px solid #3c3420;border-radius:10px;background:#1b180e"><b>Power-cycle note:</b> this prototype has no physical home sensors. After ESP32 power is removed it cannot know the absolute arm position safely. Put both arms straight at +X / 152 mm and press SET REFERENCE once. Automatic Home then works from that known reference.</div>`;
+ <div style="font-size:11px;color:#b7b7b7;line-height:1.5;margin-top:14px;padding:10px;border:1px solid #3c3420;border-radius:10px;background:#1b180e"><b>Power-on homing:</b> Automatic Home works on app reconnect while the ESP32 still has its reference. True automatic homing after complete ESP32 power loss requires physical joint reference sensors; the current 28BYJ + ULN2003 prototype has no stall/absolute-position feedback. Two Hall/home sensors can be added on GPIO32 and GPIO33 for this.</div>`;
  const style=document.createElement('style');style.textContent='.oryn-sctl-main,.oryn-sctl-cal{border:1px solid #49412c;border-radius:10px;padding:11px;background:#201d15;color:#f2d377;font-weight:750}.oryn-sctl-main:active,.oryn-sctl-cal:active{transform:translateY(1px)}';card.appendChild(style);wrap.appendChild(card);document.body.appendChild(wrap);
  document.getElementById('oryn-sctl-close').onclick=closeScaraControlPanel;wrap.onclick=e=>{if(e.target===wrap)closeScaraControlPanel();};
  const run=async(fn)=>{try{await fn();await refreshScaraControlPanel();const c=readScaraCalibrationCheck(),s=document.getElementById('oryn-sctl-calstatus');if(s)s.textContent='Saved checks: Reference '+(c.reference?'✓':'—')+' · Radius '+(c.radius_152?'✓':'—')+' · 30° '+(c.rotation_30?'✓':'—')+' · 360° '+(c.rotation_360?'✓':'—');}catch(e){mobileToast(String(e&&e.message||e));}};
