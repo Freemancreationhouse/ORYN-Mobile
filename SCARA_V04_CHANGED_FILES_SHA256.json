@@ -1,0 +1,7 @@
+{
+  "app/src/main/assets/www/offline/oryn-mobile-bootstrap.js": "ea00fd73146b8dfe28525f18020b15172c33a30ffa8602f64136037cdd69fa90",
+  "app/build.gradle": "9f0c8b79d25ced3c2fd92f514ce0be3c92d29be1a4930097ee92f0630557bd8a",
+  ".github/workflows/build-android-apk.yml": "1905458cfe814b4253dc98970d54992290aa09270909580eb51a37f8eabcbc97",
+  "tests/test_scara_v04_integration.js": "e26d5a6c824100d29d3ca13b4eb0d37fa2a123cb8e185d822c584e93cf35152d",
+  "RELEASE_NOTES_SCARA_V04_ANDROID.md": "50878ed1fe6d79f4d2dc5c5f2a7bf0fc7f4abcaeb64d709f2e392c9fdee2554b"
+}
